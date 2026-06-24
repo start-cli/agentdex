@@ -24,11 +24,11 @@ Out of scope:
 
 After document 01 the repo is a Go module (`github.com/start-cli/agentdex`, Go 1.25) with the catalog CUE module and loader in place, a repo `AGENTS.md`, and `.golangci.yml`. This package has no internal dependency on document 01's work; it is an independent leaf and can be built in parallel with it. It depends only on the standard library plus the org's standard CLI-adjacent deps already in the design.
 
-The full design is `../docs/agentdex-design.md`; the relevant slice is reproduced below.
+The full design is `docs/agentdex-design.md`; the relevant slice is reproduced below.
 
 ## References
 
-- `../docs/agentdex-design.md` — sections: models.dev integration, Why catalog.json (the merge), Go types, Client, Provider env reporting, Caching.
+- `docs/agentdex-design.md` — sections: models.dev integration, Why catalog.json (the merge), Go types, Client, Provider env reporting, Caching.
 - models.dev published catalog: https://models.dev/catalog.json — the static JSON this client fetches. Shape is `{ models, providers }`.
 - models.dev schema source: `packages/core/src/schema.ts` (zod) in the models.dev GitHub repo — the authoritative shape the Go types mirror. Do not mirror the repo-root `models.json`, which is a vendored OpenRouter dump and is not the published schema.
 - A downloaded `catalog.json` sits at the agentdex repo root (`catalog.json`) and can seed the test fixture and confirm the Go types against real data. It has been confirmed as the published `catalog.json` shape (top-level `models` and `providers` maps), not the OpenRouter dump.
@@ -67,7 +67,7 @@ The full design is `../docs/agentdex-design.md`; the relevant slice is reproduce
 ## Constraints
 
 - Pure Go, `CGO_ENABLED=0`, Go 1.25. Standard library for HTTP, JSON, and filesystem; `net/http/httptest` for tests.
-- This package is public and reusable by `start` and others. It must not import `internal/` packages, the agent catalog, or the root package. It is a leaf.
+- This package is public and reusable by external consumers. It must not import `internal/` packages, the agent catalog, or the root package. It is a leaf.
 - models.dev is an unversioned community JSON with no contract. Go's decoder silently ignores unknown fields and zero-fills renamed ones, so validation is the only signal of drift. Do not relax the two-tier validation into a no-op.
 - Follow the repo `AGENTS.md` for style, platforms, and markdown conventions.
 

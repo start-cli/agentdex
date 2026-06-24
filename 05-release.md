@@ -16,7 +16,7 @@ In scope:
 Out of scope:
 
 - Any code or schema changes. If a defect surfaces, it is fixed back in the relevant document's scope (01 to 04), not patched here.
-- The comprehensive catalog authoring, the skills command, and the start migration. All are separate future projects.
+- The comprehensive catalog authoring, the skills command, and migrating downstream consumers onto agentdex. All are separate future projects.
 
 ## Current State
 
@@ -30,9 +30,9 @@ This document is a release runbook. Every step here is a gated, outward-facing a
 
 ## References
 
-- `../docs/agentdex-design.md` — sections: Agent catalog (Home and publishing, Delivery), Build and distribution.
+- `docs/agentdex-design.md` — sections: Agent catalog (Home and publishing, Delivery), Build and distribution.
 - CUE Central Registry: https://registry.cuelang.org — and `cue login` / `CUE_REGISTRY` for publishing.
-- The `start` release process and `../homebrew-tap/Formula/start.rb` — the established pattern for the tag, the release tarball, and the formula `url`/`sha256`/`commit` fields this release mirrors.
+- The standard org release pattern: a git tag, a release tarball, and a homebrew formula whose `url`/`sha256`/`commit` fields this release fills in.
 
 ## Requirements
 

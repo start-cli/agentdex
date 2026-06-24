@@ -26,12 +26,12 @@ Documents 01 and 02 are complete:
 - `internal/catalog` loads the agent catalog from the registry (or a source-module override) and returns the catalog data types (`Catalog`, `KnownAgent`, `PathPair`, `VersionProbe`), placed so the root package can re-export them without an import cycle. `ErrCatalogUnavailable` is defined there.
 - `modelsdev` is a public leaf package: `Client` with `Catalog`, `Provider`, and `Models`; the merge; two-tier validation; the stale-JSON cache. `ErrModelsSchema` is defined there.
 
-This document adds the root package files (`agentdex.go`, `agent.go`, `engine.go`, `probe.go`, `version.go`, `resolve.go`, `errors.go`). The full design is `../docs/agentdex-design.md`.
+This document adds the root package files (`agentdex.go`, `agent.go`, `engine.go`, `probe.go`, `version.go`, `resolve.go`, `errors.go`). The full design is `docs/agentdex-design.md`.
 
 ## References
 
-- `../docs/agentdex-design.md` — sections: Public library API, Detection engine, Model resolution, Provider env reporting.
-- The result and option contracts below are the integration surface document 04 (CLI) and `start` (future consumer) build against.
+- `docs/agentdex-design.md` — sections: Public library API, Detection engine, Model resolution, Provider env reporting.
+- The result and option contracts below are the integration surface document 04 (CLI) and future external consumers build against.
 
 ## Requirements
 
@@ -81,7 +81,7 @@ This document adds the root package files (`agentdex.go`, `agent.go`, `engine.go
 ## Constraints
 
 - Pure Go, `CGO_ENABLED=0`, Go 1.25. Standard library for exec, filesystem, and concurrency.
-- The public API field sets and signatures above are the contract document 04 and `start` build against. Match them.
+- The public API field sets and signatures above are the contract document 04 and future external consumers build against. Match them.
 - Do not read user `config.cue` or resolve XDG user-config here; options carry everything the engine needs. Document 04 maps config and flags into these options.
 - XDG and home resolution for catalog/cache paths uses published environment variables with documented home fallbacks, not platform-specific user-dir helpers. Platforms: Linux, macOS, WSL (Linux-native) only.
 - The engine must remain data-driven. No per-agent branches or per-agent files.

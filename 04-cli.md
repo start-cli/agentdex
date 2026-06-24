@@ -17,7 +17,7 @@ In scope:
 
 Out of scope:
 
-- The `skills` CLI command. It is a separate future project tied to the start skills feature; omit it from this build.
+- The `skills` CLI command. It is a separate future project; omit it from this build.
 - Library behaviour (detection, resolution, catalog load, models.dev client). Documents 01 to 03 own it; this document wires the CLI over it and must not duplicate or reimplement it.
 - Publishing the catalog module, tagging a release, and filling the formula `sha256`. Document 05 (gated).
 
@@ -30,13 +30,13 @@ Documents 01 to 03 are complete. The library is whole:
 - `modelsdev.Client` and the agent catalog loader, both option-driven and config-agnostic — this document is where `config.cue` and flags are read and mapped into their options.
 - The repo `AGENTS.md`, `.golangci.yml`, and the dual module layout.
 
-The engine reports raw per-provider facts; the supported/partial/absent coverage verdict and its exit codes are built here. The full design is `../docs/agentdex-design.md`.
+The engine reports raw per-provider facts; the supported/partial/absent coverage verdict and its exit codes are built here. The full design is `docs/agentdex-design.md`.
 
 ## References
 
-- `../docs/agentdex-design.md` — sections: CLI, Catalog and models.dev coverage, Output and exit codes, Configuration, Caching, Build and distribution.
-- The sibling `start/` repo — the established source for the exit-code taxonomy, the JSON envelope shape, ldflags version injection, and the cobra command conventions this CLI mirrors. Use it as the reference rather than inventing new shapes.
-- `../homebrew-tap/Formula/start.rb` — the existing formula this build's agentdex formula mirrors (`std_go_args`, `CGO_ENABLED=0`, ldflag injection of version/commit/date).
+- `docs/agentdex-design.md` — sections: CLI, Catalog and models.dev coverage, Output and exit codes, Configuration, Caching, Build and distribution.
+- CLI output conventions, defined in full under Requirements below: the `status`/`data`/`error`/`warnings` JSON envelope, the exit-code taxonomy, ldflags injection of version/commit/date, and standard cobra command structure. These are agentdex's own conventions; settle them once here and do not invent divergent shapes per command.
+- The agentdex homebrew formula follows the standard Go formula pattern: `std_go_args`, `CGO_ENABLED=0`, and ldflag injection of version/commit/date.
 
 ## Requirements
 
@@ -101,9 +101,9 @@ The engine reports raw per-provider facts; the supported/partial/absent coverage
 
 5. Output and exit codes
 
-   - Text by default; a JSON envelope under `--json` with the standard status/data/error/warnings shape (mirror `start`'s envelope). `--json` is long form only; no `-j`.
+   - Text by default; a JSON envelope under `--json` with the standard status/data/error/warnings shape. `--json` is long form only; no `-j`.
    - `--fields` selection on `list`, `get`, and `models`. The `models` canonical id is exposed as a distinct `canonical_id` field; the short id stays `id`, so CLI and library never disagree on what `id` means.
-   - Exit codes follow the start taxonomy: 0 success, 1 failure, 2 usage, 3 not found, 4 permission, 5 conflict, 75 transient, 78 config.
+   - Exit codes follow this taxonomy: 0 success, 1 failure, 2 usage, 3 not found, 4 permission, 5 conflict, 75 transient, 78 config.
 
 6. Global flags
 
@@ -126,8 +126,8 @@ The engine reports raw per-provider facts; the supported/partial/absent coverage
 
 8. Entry point and distribution
 
-   - `cmd/agentdex/main.go` is a minimal entry point. Inject version, commit, and build date at build time via ldflags into the cli package version variable, the same pattern `start` uses; `agentdex version` reports them.
-   - Author the homebrew formula for agentdex in the org tap (`start-cli/homebrew-tap`), mirroring `Formula/start.rb`: `std_go_args`, `CGO_ENABLED=0`, ldflag injection. Leave the release-specific `url`, `sha256`, and tag as placeholders; filling them is document 05. Document the `go install github.com/start-cli/agentdex/cmd/agentdex@latest` and `brew` install paths in the README.
+   - `cmd/agentdex/main.go` is a minimal entry point. Inject version, commit, and build date at build time via ldflags into the cli package version variable; `agentdex version` reports them.
+   - Author the homebrew formula for agentdex in the org tap (`start-cli/homebrew-tap`) using the standard Go formula pattern: `std_go_args`, `CGO_ENABLED=0`, ldflag injection. Leave the release-specific `url`, `sha256`, and tag as placeholders; filling them is document 05. Document the `go install github.com/start-cli/agentdex/cmd/agentdex@latest` and `brew` install paths in the README.
 
 ## Constraints
 
@@ -135,14 +135,14 @@ The engine reports raw per-provider facts; the supported/partial/absent coverage
 - The CLI is a thin wrapper over the library. Do not reimplement detection, resolution, the merge, or caching here; call the library. The coverage rollup is the one piece of CLI-only policy, and it composes library facts rather than reaching past the public API.
 - Reuse document 03's shared none/one/many matching helper for selectors. Do not write a second matcher.
 - Do not edit the homebrew formula's release fields (`url`, `sha256`, `commit`, version) or publish anything. That is document 05.
-- Mirror `start`'s envelope and exit-code taxonomy exactly; do not invent a divergent scheme.
+- Use the envelope and exit-code taxonomy defined above exactly; do not invent a divergent scheme.
 - Follow the repo `AGENTS.md`.
 
 ## Implementation Plan
 
 1. Implement `internal/config`: XDG resolution, the `config.cue` schema and loader with load-time validation, per-cache TTL resolution, and the mapping from config plus flags into library and client options. A malformed config surfaces as exit 78.
 2. Implement `internal/tui`: colour handling (`NO_COLOR`, `--color`, terminal detection) and table rendering.
-3. Build the cobra root and global flags, the JSON envelope, and the exit-code taxonomy mirroring `start`.
+3. Build the cobra root and global flags, the JSON envelope, and the exit-code taxonomy defined above.
 4. Implement `list`, `models`, `refresh`, `version`, and `completion`, wiring selectors to the shared matcher and `models`'s canonical-id output.
 5. Implement `get` including `--tree`, `--no-models`, the models.dev-unreachable degrade-to-0 path, and the per-provider coverage rollup with its full exit-code table.
 6. Implement `cmd/agentdex/main.go` with ldflags version injection.
@@ -151,7 +151,7 @@ The engine reports raw per-provider facts; the supported/partial/absent coverage
 
 ## Implementation Guidance
 
-- The coverage rollup is detection-and-enrichment reporting, not validation: a working multi-provider agent stays exit 0 even when one provider is absent upstream, emitting a warning rather than failing. The all-present and all-absent rows are the single-provider special cases of the same per-provider rule. Catalog validation and start doctor (other projects) are where an absent provider is acted on; `get` only surfaces it.
+- The coverage rollup is detection-and-enrichment reporting, not validation: a working multi-provider agent stays exit 0 even when one provider is absent upstream, emitting a warning rather than failing. The all-present and all-absent rows are the single-provider special cases of the same per-provider rule. Acting on an absent provider belongs to other projects (catalog validation, doctor-style checks); `get` only surfaces it.
 - Keep the unreachable-models.dev path (degrade, exit 0) firmly distinct from the absent-provider path (data error, exit 78). One is transient infrastructure, the other is a catalog data fact; conflating them produces misleading exit codes.
 - The uncatalogued-query provider match is by provider id and name only, never model id: an agent maps onto models.dev only through a provider, so the provider axis is the only one an uncatalogued query can resolve against, and the data reported is that provider's, not the uncatalogued agent's. An agent name rarely equals a provider id, so this path is a discovery aid, not a claim the query is a known agent.
 - Provider-env reporting needs only the small providers map, so `get` attaches a client unconditionally (adding `EnrichModels()` unless `--no-models`), while `list` attaches none by default (only under `--models`) to stay offline-fast. Honour that split so default `list` never blocks on the network.
@@ -164,6 +164,6 @@ The engine reports raw per-provider facts; the supported/partial/absent coverage
 - An uncatalogued query that names a models.dev provider reports that provider's data labelled as provider data and exits 3; a query matching neither exits 2 and lists valid catalog ids.
 - `models <agent> sonnet` resolves to a single model and exposes the canonical id via `--json`/`--fields canonical_id` while `id` remains the short source id; an ambiguous query lists candidates and exits 3.
 - `refresh catalog|models|all` forces the corresponding cache refresh; `models` with no cache and no network exits 75; a malformed `config.cue` exits 78.
-- `--json` emits the standard status/data/error/warnings envelope; the exit-code taxonomy matches start's.
+- `--json` emits the standard status/data/error/warnings envelope; the exit-code taxonomy is as defined above.
 - `agentdex version` reports the ldflag-injected version, commit, and build date; the org-tap formula builds agentdex with `CGO_ENABLED=0` and placeholder release fields.
 - Selectors use document 03's shared matcher; no second matching implementation exists.
