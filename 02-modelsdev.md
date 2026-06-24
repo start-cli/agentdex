@@ -125,6 +125,12 @@ type Cost struct {
 
 type Tier struct {
     Input, Output, CacheRead, CacheWrite float64
+    Tier TierDimension // upstream nests the dimension under a "tier" object
+}
+
+// TierDimension is the nested "tier" object on each tiered-pricing entry: the
+// dimension and the threshold at which the tier takes effect.
+type TierDimension struct {
     Type string // tier dimension, e.g. "context"
     Size int    // threshold at which this tier takes effect, e.g. 200000
 }
@@ -164,4 +170,5 @@ func (c *Client) Models(ctx context.Context, providerIDs ...string) ([]Model, er
 - A response with an empty `models` or `providers` map yields `ErrModelsSchema` on a first fetch with no cache, and serves the stale cached copy when one exists.
 - A malformed model (`id` empty or `limit` absent) in an unrequested provider does not error; the same malformation in a provider passed to `Provider` or `Models` raises `ErrModelsSchema` from that accessor.
 - Cache behaviour: a fresh fetch writes `catalog-modelsdev.json`; a within-TTL call reads it; a network failure after expiry serves the stale file.
+- A model with tiered pricing decodes its tier dimension and threshold: `Cost.Tiers[i].Tier.Type` and `Cost.Tiers[i].Tier.Size` are populated from the nested upstream `tier` object, not left zero.
 - The package imports no `internal/` package, the agent catalog, or the root package.
