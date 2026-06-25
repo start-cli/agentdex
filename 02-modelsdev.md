@@ -44,9 +44,11 @@ The full design is `docs/agentdex-design.md`; the relevant slice is reproduced b
 2. Client
 
    - `New(opts ...ClientOption) *Client` with options for the catalog URL (default `https://models.dev/catalog.json`), cache directory (default `$XDG_CACHE_HOME/agentdex/`), and TTL (default 24h).
-   - `Catalog(ctx)` fetches, caches, merges, and returns the merged `*Catalog`.
+   - `Catalog(ctx)` returns the merged `*Catalog`. The first call fetches, caches, and merges; later calls return the in-memory copy. `Provider` and `Models` are accessors over the same memoised catalog.
    - `Provider(ctx, id)` returns one provider and an ok bool.
    - `Models(ctx, providerIDs...)` returns the merged model list for the named providers.
+   - The fetch, decode, and merge happen once per `Client` and are memoised in memory; the file cache and TTL govern that single fetch, not each call. A long-lived `Client` therefore never re-merges; a refresh is picked up by a freshly constructed `Client` (the CLI's `refresh` rewrites the cache file before the next run).
+   - Methods are safe for concurrent use. The detection engine (document 03) calls into the client once per agent across concurrent goroutines, so the first fetch is single-flighted: concurrent callers share one fetch and one cache-file write rather than racing N requests, and the memoised catalog is read-only after that.
    - Cache `catalog.json` at `$XDG_CACHE_HOME/agentdex/catalog-modelsdev.json` for the TTL; on a fetch failure serve the stale cached copy. This is a plain-JSON stale cache, distinct from document 01's CUE version-resolution cache.
 
 3. The merge
@@ -170,5 +172,6 @@ func (c *Client) Models(ctx context.Context, providerIDs ...string) ([]Model, er
 - A response with an empty `models` or `providers` map yields `ErrModelsSchema` on a first fetch with no cache, and serves the stale cached copy when one exists.
 - A malformed model (`id` empty or `limit` absent) in an unrequested provider does not error; the same malformation in a provider passed to `Provider` or `Models` raises `ErrModelsSchema` from that accessor.
 - Cache behaviour: a fresh fetch writes `catalog-modelsdev.json`; a within-TTL call reads it; a network failure after expiry serves the stale file.
+- Memoisation and concurrency: repeated and concurrent `Catalog`/`Provider`/`Models` calls on one `Client` trigger a single upstream fetch and a single cache-file write (verified by the `httptest` server request count under concurrent callers), and run race-free under `-race`.
 - A model with tiered pricing decodes its tier dimension and threshold: `Cost.Tiers[i].Tier.Type` and `Cost.Tiers[i].Tier.Size` are populated from the nested upstream `tier` object, not left zero.
 - The package imports no `internal/` package, the agent catalog, or the root package.

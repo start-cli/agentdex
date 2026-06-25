@@ -513,9 +513,16 @@ type Cost struct {
 }
 
 // Tier is one entry in a model's tiered pricing: a per-token cost subset plus
-// the dimension and threshold at which it applies.
+// the dimension and threshold at which it applies. Upstream nests the dimension
+// under a "tier" object.
 type Tier struct {
     Input, Output, CacheRead, CacheWrite float64
+    Tier TierDimension
+}
+
+// TierDimension is the nested "tier" object on each tiered-pricing entry: the
+// dimension and the threshold at which the tier takes effect.
+type TierDimension struct {
     Type string // tier dimension, e.g. "context"
     Size int    // threshold at which this tier takes effect, e.g. 200000
 }
