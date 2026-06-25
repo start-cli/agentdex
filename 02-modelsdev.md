@@ -53,9 +53,9 @@ The full design is `docs/agentdex-design.md`; the relevant slice is reproduced b
 
 3. The merge
 
-   - The provider model carries cost, limit, status, modalities, and capability flags. Benchmarks and weights live only in the provider-agnostic map. Merge by lookup join: for each provider model, look it up in the agnostic map under `providerID + "/" + modelKey` and copy benchmarks and weights across.
-   - The composite `providerID + "/" + modelKey` is a join predicate evaluated during the merge; never write it back onto `Model.ID`. Both sides keep their source ids.
-   - The join is correct by construction only for first-party providers, whose model key is short. Aggregator and proxy providers whose model key is already path-bearing do not join and do not need to (they carry no agnostic benchmarks of their own). A low join rate against the full upstream catalog is expected, not a defect.
+   - The provider model carries cost, limit, status, modalities, and capability flags. Benchmarks and weights live only in the provider-agnostic map. Merge agnostic-first: iterate the agnostic map, split each real path-style id on its single slash into its provider and model parts, and copy that entry's benchmarks and weights onto the matching provider model.
+   - Join on real keys only. Never construct `providerID + "/" + modelKey` as a stored or surfaced value, and never write anything onto `Model.ID`. Both sides keep their source ids. Driving from the agnostic map guarantees every key touched is a real models.dev id, so the merge cannot mint an id that does not exist upstream.
+   - Benchmarks and weights land only where a provider model has a real agnostic entry. First-party models decompose to their short provider key and receive them; aggregator and proxy models, whose keys are already path-bearing, have no agnostic id decomposing to them and receive nothing — correctly, as they carry no benchmarks of their own. A low attachment rate against the full upstream catalog is expected, not a defect.
 
 4. Two-tier validation
 
@@ -154,21 +154,21 @@ func (c *Client) Models(ctx context.Context, providerIDs ...string) ([]Model, er
 1. Define the Go types from the upstream zod schema, confirming each field against the repo-root `catalog.json`. Complete the types the contract abbreviates (`Modalities`, `Limit`, `Benchmark`, `Weight`).
 2. Implement `New` and the option set (URL, cache dir, TTL with defaults).
 3. Implement fetch: HTTPS GET, JSON decode, top-level validation, and the stale-on-failure JSON cache at `catalog-modelsdev.json`.
-4. Implement the merge as a lookup join over `providerID + "/" + modelKey`, copying benchmarks and weights onto the provider models without rewriting `Model.ID`.
+4. Implement the merge agnostic-first: iterate the agnostic map, split each real path-style id into its provider and model parts, and copy benchmarks and weights onto the matching provider model without constructing a composite id or rewriting `Model.ID`.
 5. Implement `Provider` and `Models`, applying the per-model required-field check only to the requested providers.
 6. Tests against an `httptest` server serving a fixture `catalog.json` (seed it from the repo-root `catalog.json`): merge correctness, the expected partial join rate for first-party versus aggregator providers, cache TTL, stale-on-failure, top-level `ErrModelsSchema`, and per-requested-provider `ErrModelsSchema`.
 
 ## Implementation Guidance
 
-- The merge is a join, not a key rewrite. The provider `id` field is not the join key: across the full catalog most provider model ids are already slash-bearing (aggregators re-expose other providers' models under path-style keys) while first-party providers keep them short, so `id` does not consistently align with the agnostic keys. Always join on the composite, and keep both source ids intact.
+- The merge is a join over real keys, not a key rewrite, and is driven from the agnostic side. Iterate the agnostic map and decompose each real path-style id into (provider, model); do not assemble a composite from the provider side. Across the full catalog most provider model ids are already slash-bearing (aggregators re-expose other providers' models under path-style keys) while first-party providers keep them short, so a provider-side composite would not consistently align with the agnostic keys and, worse, would mint ids that do not exist upstream. Decomposing real agnostic ids avoids both. Keep both source ids intact.
 - Validation exists to make drift loud, not to fully validate the schema. Keep it coarse: top-level shape always, per-model checks only for requested providers. The URL override remains the way to pin a frozen mirror, so do not harden validation into something that rejects a deliberately pinned older snapshot of the real shape.
 - Push the clock, network, and filesystem to the boundary so the merge and validation are testable from decoded inputs alone. `go.uber.org/goleak` for goroutine-leak checks is optional.
 
 ## Acceptance Criteria
 
 - `go build ./...`, `go vet ./...`, and `golangci-lint run` are clean.
-- `New().Catalog(ctx)` against an `httptest` server returns a merged catalog where first-party provider models carry benchmarks and weights looked up from the agnostic map, and `Model.ID` is unchanged on both sides.
-- A first-party provider model joins; an aggregator/proxy provider model with a path-bearing key does not join and is returned without agnostic benchmarks, with no error.
+- `New().Catalog(ctx)` against an `httptest` server returns a merged catalog where first-party provider models carry benchmarks and weights attached from the agnostic map by decomposing real path-style ids, and `Model.ID` is unchanged on both sides; no composite id is constructed.
+- A first-party provider model receives benchmarks; an aggregator/proxy provider model with a path-bearing key has no agnostic id decomposing to it and is returned without agnostic benchmarks, with no error.
 - A response with an empty `models` or `providers` map yields `ErrModelsSchema` on a first fetch with no cache, and serves the stale cached copy when one exists.
 - A malformed model (`id` empty or `limit` absent) in an unrequested provider does not error; the same malformation in a provider passed to `Provider` or `Models` raises `ErrModelsSchema` from that accessor.
 - Cache behaviour: a fresh fetch writes `catalog-modelsdev.json`; a within-TTL call reads it; a network failure after expiry serves the stale file.

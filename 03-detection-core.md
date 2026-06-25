@@ -70,8 +70,8 @@ This document adds the root package files (`agentdex.go`, `agent.go`, `engine.go
 
 5. Model resolution
 
-   - `(c *Catalog) ResolveModel(ctx, agentID, query, mc *modelsdev.Client) (m modelsdev.Model, canonicalID string, err error)` resolves a fuzzy query against the agent's provider model set, in order: exact models.dev id; exact name case-insensitive; unique substring or prefix; ambiguous returns `ErrModelAmbiguous` with candidate ids; none returns `ErrModelNotFound`.
-   - Return the matched provider `Model` and its canonical path-style id as a separate value. The canonical id is the path-style id the library derives from the provider context it resolved within (`providerID + "/" + modelKey`), equal to the model's agnostic id wherever that map carries an entry. Do not write it onto `Model.ID`; `Model.ID` keeps its source-id meaning. A caller cannot re-derive it from the returned `Model` alone (which carries no provider field), which is why the library surfaces it.
+   - `(c *Catalog) ResolveModel(ctx, agentID, query, mc *modelsdev.Client) (m modelsdev.Model, providerID string, canonicalID string, err error)` resolves a fuzzy query against the agent's provider model set, in order: exact models.dev id; exact name case-insensitive; unique substring or prefix; ambiguous returns `ErrModelAmbiguous` with candidate ids; none returns `ErrModelNotFound`.
+   - Return the matched provider `Model`, the real models.dev provider id it resolved within, and the model's canonical id. The canonical id is the model's real provider-agnostic id: probe the agnostic map under `providerID + "/" + modelKey` and return the actual key found, or `""` when the agnostic map has no entry. The composite is a lookup probe only — never returned as-is and never written onto `Model.ID`, which keeps its source-id meaning, so the library never surfaces an id that does not exist in models.dev. Return the provider id so a caller holding only the `Model` (which carries no provider field) has authoritative provider context without parsing the opaque canonical id.
    - The none/one/many matching rule here is the same rule the CLI applies to its selectors. Implement it as a single shared helper so the two cannot drift. Document 04 reuses it.
 
 6. Errors
@@ -128,7 +128,7 @@ type ResolvedPaths struct {
 func Detect(ctx context.Context, opts ...Option) ([]Agent, error)
 func DetectOne(ctx context.Context, id string, opts ...Option) (*Agent, bool, error)
 func LoadCatalog(ctx context.Context, opts ...Option) (*Catalog, error)
-func (c *Catalog) ResolveModel(ctx context.Context, agentID, query string, mc *modelsdev.Client) (m modelsdev.Model, canonicalID string, err error)
+func (c *Catalog) ResolveModel(ctx context.Context, agentID, query string, mc *modelsdev.Client) (m modelsdev.Model, providerID string, canonicalID string, err error)
 
 func WithModels(c *modelsdev.Client, opts ...ModelsOption) Option
 func WithSkipVersion() Option
@@ -146,12 +146,12 @@ func EnrichModels() ModelsOption
 3. Implement the engine steps as independent, individually testable units (presence, config/skills path resolution with tilde and env expansion and per-scope existence, version exec with pattern extraction over combined output, providers copy, enrichment). Keep filesystem, exec, env, and network at the boundary.
 4. Wire the engine to run catalog entries concurrently honouring the context, and assemble `Detect` (found-only, sorted) and `DetectOne` (always-populated, `ErrAgentUnknown` only when absent from the catalog).
 5. Implement `LoadCatalog` over document 01's loader and `WithCatalog` to bypass it.
-6. Implement `ResolveModel` and the shared none/one/many matching helper; return the canonical id as a separate value.
+6. Implement `ResolveModel` and the shared none/one/many matching helper; return the provider id and the canonical id (the real agnostic id, or empty) as separate values, using the composite only to probe the agnostic map.
 7. Tests: table-driven against a fake HOME and XDG layout seeded from `testdata`, covering presence, config probing, skills resolution, search dirs, the `--bin-path` override applying to version exec, and version parsing with a stub binary. Cover `WithSkipVersion` (no exec), enrichment degrading to nil when models.dev is unreachable, provider-env populated with `Models` suppressed, and `ResolveModel` cases (exact id, exact name, unique substring, ambiguous, no match). Isolate with `t.TempDir` and `t.Setenv`.
 
 ## Implementation Guidance
 
-- The canonical id is derived, not minted: it is the same provider-qualified composite the models.dev merge uses as its join predicate, surfaced from the provider context `ResolveModel` resolved within. Returning it separately keeps `Model.ID` honest and mirrors the merge's rule of never storing the join predicate onto a row.
+- The canonical id is read, not minted: it is the model's real provider-agnostic id, obtained by probing the agnostic map under `providerID + "/" + modelKey` and returning the actual key found, or empty when none exists. This mirrors the merge, which joins agnostic-first over real ids; the composite is only ever a lookup probe, never a returned or stored value. Returning the provider id alongside gives callers provider context without parsing the opaque canonical id.
 - `Detect` omits not-installed agents; `DetectOne` returns them populated. This asymmetry is intentional: list-style callers want only what is present, while a targeted query wants the full picture including paths for an agent that is not yet installed. Do not unify them.
 - The engine reports raw per-provider facts (which providers exist, which env vars are present). It does not compute the supported/partial/absent coverage verdict — that rollup and its exit codes are the CLI's job in document 04. Keep that policy out of the engine.
 - Version resolution failure is always non-fatal. A binary that is present but whose version cannot be parsed is a detected agent with an empty `Version`, not a detection failure.
@@ -163,5 +163,5 @@ func EnrichModels() ModelsOption
 - `DetectOne` on a catalogued but not-installed agent returns a populated `*Agent` with `Found` false and accurate path existence; on an id absent from the catalog returns `ErrAgentUnknown`.
 - `WithBinPaths` overrides presence and is the binary used for the version exec; `WithSearchDirs` extends presence; `WithSkipVersion` performs no exec and leaves `Version` empty.
 - With a models.dev client attached, `ProviderEnv` reflects real env var presence; with `EnrichModels()` also passed, `Agent.Models` is filled; with the client unreachable and no cache, detection still succeeds with both nil.
-- `ResolveModel` returns the matched `Model` and a separate canonical path-style id, leaves `Model.ID` as its source id, and returns `ErrModelAmbiguous`/`ErrModelNotFound` for the ambiguous/no-match cases.
+- `ResolveModel` returns the matched `Model`, the real provider id it resolved within, and the canonical agnostic id (or `""` when the model has no agnostic entry); it leaves `Model.ID` as its source id, constructs no composite, and returns `ErrModelAmbiguous`/`ErrModelNotFound` for the ambiguous/no-match cases.
 - The none/one/many matching is a single shared helper reused by the CLI in document 04.

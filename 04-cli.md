@@ -76,7 +76,7 @@ The engine reports raw per-provider facts; the supported/partial/absent coverage
 
    - `list` does not enrich models by default (offline-fast once cached); `--models` opts in.
    - `get <agent>` enriches models and reports provider-env by default. `--no-models` opts out of per-model enrichment; provider-env still shows (it needs only the providers map). `--tree` prints the config directory tree without parsing contents. When detection succeeds but models.dev is unreachable with no cache, `get` degrades: print the detected agent, omit the Models and provider-env sections, warn that enrichment was unavailable, and exit 0.
-   - `models <agent> [query]` lists the agent's provider models with pricing, limits, and capabilities. With a `query`, apply selector matching: a single match prints that model (with `--json` or `--fields canonical_id` exposing the canonical id); multiple matches list candidates.
+   - `models <agent> [query]` lists the agent's provider models with pricing, limits, and capabilities. With a `query`, apply selector matching: a single match prints that model (with `--json` or `--fields canonical_id` exposing the canonical id, shown only when the model has a real models.dev agnostic id); multiple matches list candidates.
    - `refresh [target]` forces a cache refresh for `catalog`, `models`, or `all`.
 
 3. Selector matching
@@ -102,7 +102,7 @@ The engine reports raw per-provider facts; the supported/partial/absent coverage
 5. Output and exit codes
 
    - Text by default; a JSON envelope under `--json` with the standard status/data/error/warnings shape. `--json` is long form only; no `-j`.
-   - `--fields` selection on `list`, `get`, and `models`. The `models` canonical id is exposed as a distinct `canonical_id` field; the short id stays `id`, so CLI and library never disagree on what `id` means.
+   - `--fields` selection on `list`, `get`, and `models`. The `models` canonical id is exposed as a distinct `canonical_id` field, populated from the value the library returns and shown only when non-empty (a model with no models.dev agnostic id has no canonical id); the short id stays `id`, so CLI and library never disagree on what `id` means. The CLI never constructs a canonical id itself.
    - Exit codes follow this taxonomy: 0 success, 1 failure, 2 usage, 3 not found, 4 permission, 5 conflict, 75 transient, 78 config.
 
 6. Global flags
@@ -162,7 +162,7 @@ The engine reports raw per-provider facts; the supported/partial/absent coverage
 - `list` runs offline once cached and omits model enrichment by default; `--models` enriches.
 - `get <agent>` on a fully supported agent reports detection, provider-env, and models at exit 0; on a some-present agent warns and stays exit 0; on an all-absent agent exits 78; on a not-installed catalogued agent exits 3; when models.dev is unreachable with no cache it degrades with a warning and exits 0.
 - An uncatalogued query that names a models.dev provider reports that provider's data labelled as provider data and exits 3; a query matching neither exits 2 and lists valid catalog ids.
-- `models <agent> sonnet` resolves to a single model and exposes the canonical id via `--json`/`--fields canonical_id` while `id` remains the short source id; an ambiguous query lists candidates and exits 3.
+- `models <agent> sonnet` resolves to a single model and exposes its real canonical id via `--json`/`--fields canonical_id` (blank or omitted when the model has no agnostic entry) while `id` remains the short source id; an ambiguous query lists candidates and exits 3.
 - `refresh catalog|models|all` forces the corresponding cache refresh; `models` with no cache and no network exits 75; a malformed `config.cue` exits 78.
 - `--json` emits the standard status/data/error/warnings envelope; the exit-code taxonomy is as defined above.
 - `agentdex version` reports the ldflag-injected version, commit, and build date; the org-tap formula builds agentdex with `CGO_ENABLED=0` and placeholder release fields.

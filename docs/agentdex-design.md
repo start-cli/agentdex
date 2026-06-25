@@ -232,10 +232,12 @@ func DetectOne(ctx context.Context, id string, opts ...Option) (*Agent, bool, er
 // LoadCatalog fetches and loads the agent catalog (registry plus cache).
 func LoadCatalog(ctx context.Context, opts ...Option) (*Catalog, error)
 
-// ResolveModel maps a fuzzy query (e.g. "sonnet") to a canonical models.dev model
-// for the given agent's provider(s). It returns the matched provider Model and its
-// canonical path-style id as a separate value; Model.ID keeps its source-id meaning.
-func (c *Catalog) ResolveModel(ctx context.Context, agentID, query string, mc *modelsdev.Client) (m modelsdev.Model, canonicalID string, err error)
+// ResolveModel maps a fuzzy query (e.g. "sonnet") to a models.dev model for the
+// given agent's provider(s). It returns the matched provider Model, the real
+// models.dev provider id it resolved within, and the model's canonical
+// (provider-agnostic) id when the agnostic map carries an entry for it, or ""
+// when it does not. Model.ID keeps its source-id meaning; no id is ever constructed.
+func (c *Catalog) ResolveModel(ctx context.Context, agentID, query string, mc *modelsdev.Client) (m modelsdev.Model, providerID string, canonicalID string, err error)
 ```
 
 Options:
@@ -440,25 +442,25 @@ the two:
 - provider Model: cost, limit, status, modalities, capability flags
 - provider-agnostic ModelMetadata: benchmarks, weights
 
-The two maps are distinct keyspaces. The provider map is nested, so a provider
-model's natural key is the composite (provider id, model key); its short `id` field
-restates that model key. The provider-agnostic map is keyed by the path-style id. The
-merge is therefore a lookup join, not a key rewrite: each provider model is enriched
-by looking it up in the agnostic map under `providerID + "/" + modelKey`. Both sides
-keep their source ids; the composite is a join predicate evaluated in the merge, never
-stored back onto a row. The provider `id` field is not the join key — across the full
-catalog most provider model ids are already slash-bearing (aggregator and proxy
-providers re-expose other providers' models under path-style keys), while first-party
-providers keep them short, so the `id` field does not consistently align with the
-agnostic path-style keys.
+The two maps are distinct keyspaces. The provider map is nested under (provider id,
+model key); a provider model's short `id` field restates its model key. The
+provider-agnostic map is keyed by the real path-style id. The merge is a lookup join
+over real keys, driven from the agnostic side: it iterates the provider-agnostic map,
+splits each real path-style id on its single slash into its provider and model parts,
+and attaches that entry's benchmarks and weights to the matching provider model. Both
+sides keep their source ids; nothing is written onto `Model.ID`, and no composite id is
+ever constructed. Driving the merge from the agnostic map means every key touched is a
+real models.dev id — the provider-side `id` is never assembled into a path, so the
+merge cannot mint an identifier that does not exist upstream.
 
-The composite join is correct by construction only for first-party providers, whose
-model key is short: `providerID + "/" + modelKey` then equals the agnostic path-style
-id (for example `anthropic/claude-opus-4-5`). Aggregator and proxy providers, whose
-model key is already path-bearing (for example requesty's `xai/grok-4`), do not join
-and do not need to — they carry no agnostic benchmarks or weights of their own. agentdex
-enriches only the first-party agent providers its catalog lists, so a low join rate
-measured against the full models.dev catalog is expected, not a defect in the merge.
+The join lands only where a provider model has a real agnostic entry. A first-party
+model decomposes cleanly: the agnostic id `anthropic/claude-opus-4-5` splits to provider
+`anthropic`, model `claude-opus-4-5`, which is exactly that provider's model key.
+Aggregator and proxy providers re-expose other providers' models under path-bearing keys
+(for example requesty's `xai/grok-4`); no agnostic id decomposes to them, so they receive
+nothing — correctly, as they carry no benchmarks or weights of their own. agentdex
+enriches only the first-party agent providers its catalog lists, so a low attachment rate
+measured against the full models.dev catalog is expected, not a defect.
 
 ### Go types
 
@@ -575,25 +577,23 @@ agent's provider model set, in this order:
 4. ambiguous match returns ErrModelAmbiguous with the candidate ids; no match
    returns ErrModelNotFound
 
-This is where `--model sonnet` becomes a canonical id. ResolveModel returns the
-matched provider Model together with its canonical path-style id as an explicit second
-value `(modelsdev.Model, canonicalID string, error)`. The canonical id is the
-path-style id (for a provider model, the derived `providerID + "/" + modelKey`),
-computed by the library from the provider context it resolved within. This equals the
-model's models.dev provider-agnostic id wherever that map carries an entry, and is
-otherwise the same deterministic provider-qualified composite the merge uses as its join
-predicate; it is not a newly minted identifier. It is returned
-separately rather than written onto `Model.ID`, so `Model.ID` keeps its documented
-source-id meaning (short within a provider map) and the join predicate is never stored
-back onto a row, mirroring the merge. A caller cannot re-derive the canonical id from
-the returned Model alone, because `Model` carries no provider field, so the library —
-the one place holding the provider context — surfaces it. start calls this rather than
-maintaining an alias map. The agentdex CLI surfaces the same resolution via `agentdex
-models <agent> <query>` (selector matching), so it is reachable without importing the
-library. The CLI exposes this value as a distinct `canonical_id` output field; the short
-`Model.ID` stays the `id` field, so the CLI and library never disagree on what `id`
-means. Fuzzy matching is an input convenience only; how start stores `default_model`
-is settled in the start migration.
+This is where `--model sonnet` resolves to a concrete model. ResolveModel returns the
+matched provider Model, the real models.dev provider id it resolved within, and the
+model's canonical id, as explicit values `(modelsdev.Model, providerID string,
+canonicalID string, error)`. The canonical id is the model's real provider-agnostic id:
+the library probes the agnostic map under `providerID + "/" + modelKey` and returns the
+actual key it finds, or `""` when the agnostic map has no entry for that model. The
+composite is used only as a lookup probe — never returned as-is and never written onto
+`Model.ID`, so `Model.ID` keeps its documented source-id meaning (short within a provider
+map) and the library never surfaces an identifier that does not exist in models.dev. The
+provider id is returned so a caller holding only the Model — which carries no provider
+field — still has authoritative provider context without parsing the opaque canonical id.
+start calls this rather than maintaining an alias map. The agentdex CLI surfaces the same
+resolution via `agentdex models <agent> <query>` (selector matching), so it is reachable
+without importing the library. The CLI exposes the canonical id as a distinct
+`canonical_id` output field, shown only when non-empty; the short `Model.ID` stays the
+`id` field, so the CLI and library never disagree on what `id` means. Fuzzy matching is an
+input convenience only; how start stores `default_model` is settled in the start migration.
 
 ### Provider env reporting
 
@@ -697,7 +697,8 @@ Behaviour:
 - `models <agent> [query]` lists the agent's provider models with pricing, limits,
   and capabilities. With a `query` it applies selector matching: a single match
   prints that model (use `--json` or `--fields canonical_id` to script the canonical
-  id); multiple matches list the candidates.
+  id, shown only when the model has a real models.dev agnostic id); multiple matches
+  list the candidates.
 - `refresh` forces a cache refresh for the catalog, models.dev, or both.
 - `skills <agent> [name]` is read-only discovery. With no name it lists SKILL.md
   entries in the agent's resolved skills directory. With a name it applies selector
@@ -896,19 +897,20 @@ decisions and migrations that section implies but does not settle.
 start/library #Agent currently stores agent-native model strings that are passed
 verbatim to the launch command (`command: "{{.bin}} --model {{.model}} ..."`): claude
 uses `sonnet`/`opus`, aichat uses `vertexai:gemini-2.5-flash`. agentdex provides
-canonical models.dev ids and `ResolveModel`; it stores no model for launch. The
-migration must decide what `default_model` holds and how launch obtains the
-agent-native string the binary accepts:
+`ResolveModel`, which returns the matched model, its provider id, and its real
+models.dev canonical (agnostic) id when one exists; it constructs no id and stores no
+model for launch. The migration must decide what `default_model` holds and how launch
+obtains the agent-native string the binary accepts:
 
 - store the canonical id and translate to the native string at launch (the resolved
   provider-nested short id is the candidate translation source)
-- store the native string and treat the canonical id as verification and selection
-  only
+- store the native string and treat resolution as verification and selection only
 - store both
 
-Verifying `default_model` against the catalog assumes a canonical id, so the chosen
-option must reconcile verification with launch usage. Existing `default_model` values
-are non-canonical and must be migrated as part of this work.
+Verifying `default_model` against the catalog uses the canonical id where the model
+has an agnostic entry and otherwise falls back to unique resolution within the agent's
+providers, so the chosen option must reconcile verification with launch usage. Existing
+`default_model` values are non-canonical and must be migrated as part of this work.
 
 ### Resolving a library agent to its catalog id
 
@@ -973,6 +975,10 @@ start and library project files) rather than landing everything in one change.
   stores default_model is settled by the start migration. The agentdex CLI surfaces
   resolution through selector matching on `models <agent> <query>`; there is no
   separate resolve command.
+- Model identity is models.dev's own provider-agnostic id, never a constructed string.
+  The merge joins agnostic-first over real path-style ids; ResolveModel returns the real
+  provider id plus the canonical agnostic id when one exists (empty otherwise), using the
+  composite only as a lookup probe. No synthetic identifier is minted or surfaced.
 - start/library #Agent keeps a static `bin` for offline launch with no detection on
   the hot path. start verifies it (and default_model) against agentdex at install
   and via start doctor. Config and skills paths leave start/library entirely.
