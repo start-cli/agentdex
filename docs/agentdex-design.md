@@ -229,8 +229,12 @@ func Detect(ctx context.Context, opts ...Option) ([]Agent, error)
 // Detect, a known-but-not-installed agent is a normal result, not an omission.
 func DetectOne(ctx context.Context, id string, opts ...Option) (*Agent, bool, error)
 
-// LoadCatalog fetches and loads the agent catalog (registry plus cache).
-func LoadCatalog(ctx context.Context, opts ...Option) (*Catalog, error)
+// LoadCatalog fetches and loads the agent catalog (registry plus cache). The
+// bool is the loader's stale flag: true when re-resolution failed after the TTL
+// expired and the last resolved version was reused (the catalog is still
+// usable), so a caller can warn before passing it into Detect/DetectOne via
+// WithCatalog.
+func LoadCatalog(ctx context.Context, opts ...Option) (cat *Catalog, stale bool, err error)
 
 // ResolveModel maps a fuzzy query (e.g. "sonnet") to a models.dev model for the
 // given agent's provider(s). It returns the matched provider Model, the real

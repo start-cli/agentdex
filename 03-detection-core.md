@@ -21,12 +21,13 @@ Out of scope:
 
 ## Current State
 
-Documents 01 and 02 are complete:
+Documents 01 and 02 are complete, and document 01's work already placed three root-package files:
 
-- `internal/catalog` loads the agent catalog from the registry (or a source-module override) and returns the catalog data types (`Catalog`, `KnownAgent`, `PathPair`, `VersionProbe`), placed so the root package can re-export them without an import cycle. `ErrCatalogUnavailable` is defined there.
+- `internal/catalog` loads the agent catalog from the registry (or a source-module override) and returns the catalog data types (`Catalog`, `KnownAgent`, `PathPair`, `VersionProbe`), placed so the root package can re-export them without an import cycle. Its load-failure sentinel is `catalog.ErrUnavailable`.
 - `modelsdev` is a public leaf package: `Client` with `Catalog`, `Provider`, and `Models`; the merge; two-tier validation; the stale-JSON cache. `ErrModelsSchema` is defined there.
+- The root package already carries `agent.go` (the re-exported catalog data types `Catalog`, `KnownAgent`, `PathPair`, `VersionProbe`), `errors.go` (`ErrCatalogUnavailable`), and `catalog.go` (the private `loadCatalog(ctx, loader) (*Catalog, bool, error)` seam that drives the internal loader, maps its result into the public `Catalog`, wraps `catalog.ErrUnavailable` as `ErrCatalogUnavailable`, and already returns the stale flag).
 
-This document adds the root package files (`agentdex.go`, `agent.go`, `engine.go`, `probe.go`, `version.go`, `resolve.go`, `errors.go`). The full design is `docs/agentdex-design.md`.
+This document extends `agent.go` (adds `Agent` and `ResolvedPaths`) and `errors.go` (adds the new sentinels), wraps the existing `loadCatalog` seam as the exported `LoadCatalog` rather than rebuilding it, and adds the remaining root-package files (`agentdex.go`, `engine.go`, `probe.go`, `version.go`, `resolve.go`). The full design is `docs/agentdex-design.md`.
 
 ## References
 
@@ -44,7 +45,7 @@ This document adds the root package files (`agentdex.go`, `agent.go`, `engine.go
 
    - `Detect(ctx, opts...) ([]Agent, error)` runs every catalog entry through the engine and returns the agents found, sorted by id. Not-installed agents are omitted.
    - `DetectOne(ctx, id, opts...) (*Agent, bool, error)` detects a single agent by catalog id. For any id in the catalog it returns a fully populated `*Agent` (config and skills resolved for both scopes, `Found` and per-scope existence flags reflecting reality) whether or not the binary is installed; the bool mirrors `Agent.Found`. An id absent from the catalog returns `ErrAgentUnknown` — the only "not a catalog agent" signal. Unlike `Detect`, a known-but-not-installed agent is a normal result here, not an omission.
-   - `LoadCatalog(ctx, opts...) (*Catalog, error)` fetches and loads the agent catalog via document 01's loader (registry plus cache).
+   - `LoadCatalog(ctx, opts...) (*Catalog, bool, error)` fetches and loads the agent catalog via document 01's loader (registry plus cache). The bool is the loader's stale flag: true when re-resolution failed after the TTL expired and the last resolved version was reused, in which case the catalog is still usable. It is surfaced here so document 04 can warn on a stale catalog, then pass the loaded catalog into `Detect`/`DetectOne` via `WithCatalog`. `Detect` and `DetectOne` keep their signatures and do not surface staleness; the explicit load step is where a caller observes it.
 
 3. Options
 
@@ -54,6 +55,11 @@ This document adds the root package files (`agentdex.go`, `agent.go`, `engine.go
    - `WithBinPaths(map[string]string) Option` overrides a specific agent's binary path by id; this wins over PATH and search dirs.
    - `WithDisabled(ids...) Option` skips catalog ids.
    - `WithCatalog(c *Catalog) Option` uses a preloaded catalog instead of loading one.
+   - `WithCatalogModule(path string) Option` overrides the catalog module path (config `catalog.module`). Ignored when `WithCatalog` supplies a preloaded catalog.
+   - `WithCatalogTTL(d time.Duration) Option` sets the catalog version-resolution cache TTL. Document 04 resolves the effective duration (`catalog.ttl`, then `cache_ttl`, then the built-in 24h default) and passes a concrete value.
+   - `WithCacheDir(dir string) Option` overrides the catalog version-resolution cache directory; document 04 supplies the resolved XDG cache path.
+
+   These three carry the catalog-source config into the engine so document 04 maps config and flags entirely through options, with no direct dependency on `internal/catalog`. The models.dev source config (`models.url`, `models.ttl`) is carried by the `*modelsdev.Client` document 04 builds and attaches via `WithModels`, so it needs no engine option here.
 
 4. Detection engine (data-driven, no per-agent Go code)
 
@@ -64,15 +70,15 @@ This document adds the root package files (`agentdex.go`, `agent.go`, `engine.go
    3. Skills. If `skills` is set, resolve both scopes the same way into `Agent.Skills` with per-scope existence. No skills concept leaves `Agent.Skills` at its zero value. agentdex resolves both scopes and reports existence; it never picks a scope.
    4. Version. If `version` is set and `WithSkipVersion` is not in effect, exec the detected `BinaryPath` (never re-resolved through PATH, so the override and search dirs apply) with `version.args` under a short context timeout, then apply `version.pattern` to combined stdout and stderr. Failure is non-fatal: leave `Version` empty.
    5. Providers. Copy `provider` ids from the catalog. Offline; no filesystem or network.
-   6. Enrichment. When a models.dev client is attached, fetch the providers map and record each provider's API-key env var presence in `ProviderEnv`; when `EnrichModels()` was also passed, fill `Models` for the agent's providers. With no client, or when models.dev is unreachable with no cache, both are skipped and detection still succeeds with `ProviderEnv` and `Models` nil. Provider-env needs only the small providers map, so it stays populated even when per-model `Models` is suppressed.
+   6. Enrichment. When a models.dev client is attached, fetch the providers map and record each provider's API-key env var presence in `ProviderEnv`; when `EnrichModels()` was also passed, fill `Models` for the agent's providers. Degradation is scoped to transient absence: with no client, or when models.dev is unreachable with no cache, both are skipped and detection still succeeds with `ProviderEnv` and `Models` nil. A `modelsdev.ErrModelsSchema` is not a transient failure and does not degrade — it propagates from `Detect`/`DetectOne` as the engine error, so models.dev schema drift stays loud rather than collapsing to silent blanks. The engine distinguishes the two with `errors.Is(err, modelsdev.ErrModelsSchema)`. Provider-env needs only the small providers map, so it stays populated even when per-model `Models` is suppressed: for a well-formed provider, env is reported whether or not enrichment was requested. Schema drift stays loud on this path too. Read provider-env through the validating accessor for each requested provider, so a malformed model in a requested provider raises `modelsdev.ErrModelsSchema` regardless of whether `EnrichModels()` was passed; `Models` suppression and schema failure are independent. Do not source env from the non-validating full catalog, which would let a malformed model pass silently under `--no-models`.
 
-   The four core steps (presence, config, skills, version) use only the filesystem and catalog and always work offline. Version is the only step that execs a binary; `WithSkipVersion` removes it. Enrichment is the only step that reaches models.dev and degrades to nil rather than failing. The engine processes catalog entries concurrently and honours the context.
+   The four core steps (presence, config, skills, version) use only the filesystem and catalog and always work offline. Version is the only step that execs a binary; `WithSkipVersion` removes it. Enrichment is the only step that reaches models.dev; a transient gap (no client, or unreachable with no cache) degrades to nil rather than failing, but a `modelsdev.ErrModelsSchema` propagates so schema drift is not silently swallowed. The engine processes catalog entries concurrently and honours the context.
 
 5. Model resolution
 
    - `(c *Catalog) ResolveModel(ctx, agentID, query, mc *modelsdev.Client) (m modelsdev.Model, providerID string, canonicalID string, err error)` resolves a fuzzy query against the agent's provider model set, in order: exact models.dev id; exact name case-insensitive; unique substring or prefix; ambiguous returns `ErrModelAmbiguous` with candidate ids; none returns `ErrModelNotFound`.
    - Return the matched provider `Model`, the real models.dev provider id it resolved within, and the model's canonical id. The canonical id is the model's real provider-agnostic id: probe the agnostic map under `providerID + "/" + modelKey` and return the actual key found, or `""` when the agnostic map has no entry. The composite is a lookup probe only — never returned as-is and never written onto `Model.ID`, which keeps its source-id meaning, so the library never surfaces an id that does not exist in models.dev. Return the provider id so a caller holding only the `Model` (which carries no provider field) has authoritative provider context without parsing the opaque canonical id.
-   - The none/one/many matching rule here is the same rule the CLI applies to its selectors. Implement it as a single shared helper so the two cannot drift. Document 04 reuses it.
+   - The none/one/many matching rule here is the same rule the CLI applies to its selectors. Implement it once as a generic helper in a shared internal package (for example `internal/match`) that both this package and document 04's `internal/cli` import, so the two cannot drift. The helper operates on a plain id/name set and needs no `agentdex` types, so it introduces no import cycle, and it stays off the public API rather than being exported from this package. Do not place it as an unexported function in `resolve.go`, where `internal/cli` could not reach it.
 
 6. Errors
 
@@ -127,7 +133,7 @@ type ResolvedPaths struct {
 ```go
 func Detect(ctx context.Context, opts ...Option) ([]Agent, error)
 func DetectOne(ctx context.Context, id string, opts ...Option) (*Agent, bool, error)
-func LoadCatalog(ctx context.Context, opts ...Option) (*Catalog, error)
+func LoadCatalog(ctx context.Context, opts ...Option) (cat *Catalog, stale bool, err error)
 func (c *Catalog) ResolveModel(ctx context.Context, agentID, query string, mc *modelsdev.Client) (m modelsdev.Model, providerID string, canonicalID string, err error)
 
 func WithModels(c *modelsdev.Client, opts ...ModelsOption) Option
@@ -136,18 +142,21 @@ func WithSearchDirs(dirs ...string) Option
 func WithBinPaths(m map[string]string) Option
 func WithDisabled(ids ...string) Option
 func WithCatalog(c *Catalog) Option
+func WithCatalogModule(path string) Option
+func WithCatalogTTL(d time.Duration) Option
+func WithCacheDir(dir string) Option
 func EnrichModels() ModelsOption
 ```
 
 ## Implementation Plan
 
-1. Re-export the catalog data types and define `Agent`, `ResolvedPaths`, and the sentinel errors.
+1. The catalog data types are already re-exported in `agent.go` and `ErrCatalogUnavailable` already exists in `errors.go`. Add `Agent` and `ResolvedPaths` to `agent.go`, and the `ErrAgentUnknown`/`ErrModelAmbiguous`/`ErrModelNotFound` sentinels to `errors.go`.
 2. Implement the `Option` and `ModelsOption` sets and the internal config struct they populate.
 3. Implement the engine steps as independent, individually testable units (presence, config/skills path resolution with tilde and env expansion and per-scope existence, version exec with pattern extraction over combined output, providers copy, enrichment). Keep filesystem, exec, env, and network at the boundary.
 4. Wire the engine to run catalog entries concurrently honouring the context, and assemble `Detect` (found-only, sorted) and `DetectOne` (always-populated, `ErrAgentUnknown` only when absent from the catalog).
-5. Implement `LoadCatalog` over document 01's loader and `WithCatalog` to bypass it.
-6. Implement `ResolveModel` and the shared none/one/many matching helper; return the provider id and the canonical id (the real agnostic id, or empty) as separate values, using the composite only to probe the agnostic map.
-7. Tests: table-driven against a fake HOME and XDG layout seeded from `testdata`, covering presence, config probing, skills resolution, search dirs, the `--bin-path` override applying to version exec, and version parsing with a stub binary. Cover `WithSkipVersion` (no exec), enrichment degrading to nil when models.dev is unreachable, provider-env populated with `Models` suppressed, and `ResolveModel` cases (exact id, exact name, unique substring, ambiguous, no match). Isolate with `t.TempDir` and `t.Setenv`.
+5. Implement `LoadCatalog` by wrapping the existing private `loadCatalog` seam in `catalog.go` (which already drives the loader, maps the result into the public `Catalog`, and returns the stale flag) rather than rebuilding that mapping. Thread `WithCatalogModule`, `WithCatalogTTL`, and `WithCacheDir` into the loader's `WithModulePath`/`WithTTL`/`WithCacheDir`, and `WithCatalog` to bypass the loader entirely. Surface the loader's stale flag through `LoadCatalog`'s bool return. Construct the production registry via `internal/catalog` only when no preloaded catalog is supplied.
+6. Implement `ResolveModel`, and the shared none/one/many matching helper in a shared internal package (for example `internal/match`) so document 04's `internal/cli` reuses the same code; `ResolveModel` calls into it. Return the provider id and the canonical id (the real agnostic id, or empty) as separate values, using the composite only to probe the agnostic map.
+7. Tests: table-driven against a fake HOME and XDG layout seeded from `testdata`, covering presence, config probing, skills resolution, search dirs, the `--bin-path` override applying to version exec, and version parsing with a stub binary. Cover `WithSkipVersion` (no exec), enrichment degrading to nil when models.dev is unreachable, `modelsdev.ErrModelsSchema` propagating instead of degrading, provider-env populated with `Models` suppressed, and `ResolveModel` cases (exact id, exact name, unique substring, ambiguous, no match). Isolate with `t.TempDir` and `t.Setenv`.
 
 ## Implementation Guidance
 
@@ -162,6 +171,8 @@ func EnrichModels() ModelsOption
 - `Detect` returns only agents whose binary was found, sorted by id, with config and skills paths resolved and per-scope existence set.
 - `DetectOne` on a catalogued but not-installed agent returns a populated `*Agent` with `Found` false and accurate path existence; on an id absent from the catalog returns `ErrAgentUnknown`.
 - `WithBinPaths` overrides presence and is the binary used for the version exec; `WithSearchDirs` extends presence; `WithSkipVersion` performs no exec and leaves `Version` empty.
-- With a models.dev client attached, `ProviderEnv` reflects real env var presence; with `EnrichModels()` also passed, `Agent.Models` is filled; with the client unreachable and no cache, detection still succeeds with both nil.
+- With a models.dev client attached, `ProviderEnv` reflects real env var presence; with `EnrichModels()` also passed, `Agent.Models` is filled; with the client unreachable and no cache, detection still succeeds with both nil; a requested provider carrying a malformed model surfaces `modelsdev.ErrModelsSchema` from `Detect`/`DetectOne` rather than degrading to nil, including when only provider-env is requested and per-model enrichment is off.
 - `ResolveModel` returns the matched `Model`, the real provider id it resolved within, and the canonical agnostic id (or `""` when the model has no agnostic entry); it leaves `Model.ID` as its source id, constructs no composite, and returns `ErrModelAmbiguous`/`ErrModelNotFound` for the ambiguous/no-match cases.
-- The none/one/many matching is a single shared helper reused by the CLI in document 04.
+- The none/one/many matching is a single shared helper, in a shared internal package importable by both this package and `internal/cli`, reused by the CLI in document 04; it is not exported from the public API and is not an unexported function private to `resolve.go`.
+- `WithCatalogModule`, `WithCatalogTTL`, and `WithCacheDir` reach the underlying loader: `LoadCatalog` honours an overridden module path, TTL, and cache directory, so document 04 applies `catalog.module`, `catalog.ttl`, and `cache_ttl` through options alone with no import of `internal/catalog`.
+- `LoadCatalog` returns the loader's stale flag as its bool: a within-TTL or freshly re-resolved load returns false, and a load that reused the last resolved version after a failed re-resolution returns true with a usable catalog.
