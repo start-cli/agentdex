@@ -9,9 +9,9 @@ import (
 )
 
 // loadCatalog drives the internal loader and maps its internal representation
-// into the public Catalog. It is the seam document 03 wraps as the exported
-// LoadCatalog (with Options and a preloaded-catalog fast path); the import
-// direction stays one-way because internal/catalog never imports this package.
+// into the public Catalog. The exported LoadCatalog (in agentdex.go) wraps this
+// seam with Options and a preloaded-catalog fast path; the import direction stays
+// one-way because internal/catalog never imports this package.
 //
 // stale reports that the loader reused the last resolved version after a failed
 // re-resolution; the catalog is still usable and a caller may warn.
