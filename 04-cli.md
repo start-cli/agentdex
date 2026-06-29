@@ -86,7 +86,16 @@ The engine reports raw per-provider facts; the supported/partial/absent coverage
 
 4. Coverage rollup and exit codes (`get`)
 
-   The library returns `ErrAgentUnknown` whenever a query matches no catalog agent. The CLI then matches the query against models.dev provider ids and names (exact, then unique substring or prefix; never against model ids) to choose between the two outcomes below. Provider verdicts are evaluated per provider, because `provider` is a list; the agent-level result is a rollup:
+   `get` resolves `<agent>` with the document 03 shared matcher (requirement 3) over the loaded catalog's agents, not by passing the raw query to `DetectOne`. The matcher's outcome selects the path: a Unique result is detected by its exact catalog id via `DetectOne` and feeds the catalog (`yes`) rows below; an Ambiguous result lists the candidate ids and exits 3; only a None result — the query matches no catalog agent — falls through to the models.dev provider match. On that fallthrough the CLI matches the query against models.dev provider ids and names (exact, then unique substring or prefix; never against model ids) to choose between the two `no` rows. Provider verdicts are evaluated per provider, because `provider` is a list; the agent-level result is a rollup of those per-provider verdicts.
+
+   The per-provider present/absent verdict is not read from the `Agent` that `DetectOne` returns. Enrichment silently drops absent providers and surfaces neither the present set nor, on a models.dev outage, any signal, so `all present`, `some present`, and `none present` are indistinguishable from the result alone and an absent provider cannot be named for the warning. Instead `get` builds the rollup itself by probing `modelsdev.Client.Provider(ctx, pid)` for each provider in `Agent.Providers`. `Provider` returns `(provider, found, err)` where `found` is independent of `err`, so the rollup branches on `found` first and only then on `err` — collapsing the two into a single error test would misread schema drift as an outage:
+
+   - `found == false` with a non-nil error means models.dev is unreachable (the catalog could not be loaded): degrade, omit the Models and provider-env sections, warn, and exit 0 (the unreachable row), kept distinct from any absent-provider verdict;
+   - `found == true` with a non-nil error (`ErrModelsSchema`) means the provider exists in a reachable models.dev but carries a malformed model: this is a data error, not an outage. Treat it like the `none present` row — report the agent, emit an error, exit 78 — never as a transient degrade;
+   - `(_, false, nil)` means the provider is genuinely absent from a reachable models.dev: it drives the `some present`/`none present` rows and is the provider named in the warning;
+   - `(_, true, nil)` means the provider is present and enriches.
+
+   Detection and the provider list come from `DetectOne`; the coverage axis is composed in the CLI from the public `modelsdev.Client`, never by reaching past the public API. The rollup table:
 
    | catalog | providers in models.dev | result |
    | --- | --- | --- |
@@ -98,6 +107,7 @@ The engine reports raw per-provider facts; the supported/partial/absent coverage
 
    - A catalogued agent that is not installed is not found, exit 3.
    - A models.dev that cannot be reached (no network, no cache) is distinct from a provider being absent: `get` degrades with a warning and exits 0; a model-centric command (`models`) that cannot reach models.dev with no cache exits 75. The catalog being unloadable exits 75.
+   - The no-catalog fallthrough needs models.dev to choose between the two `no` rows. If models.dev cannot be reached there (no cache), the query cannot be classified as a provider match or as unknown, so `get` exits 75 (transient) rather than asserting unknown (2) or a provider match (3). This is the no-detection counterpart to the degrade-to-0 rule, which applies only once an agent has been detected.
 
 5. Output and exit codes
 
