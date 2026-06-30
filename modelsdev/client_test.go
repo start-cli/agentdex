@@ -302,6 +302,46 @@ func TestStaleServedOnFetchFailure(t *testing.T) {
 	}
 }
 
+func TestForceRefreshFailsRatherThanServeStale(t *testing.T) {
+	// The honest counterpart to TestStaleServedOnFetchFailure: with WithForceRefresh
+	// a fetch failure is reported even when a cache exists, so an explicit refresh
+	// learns the network was unreachable instead of silently serving stale bytes.
+	dir := t.TempDir()
+	good, _ := serveBytes(t, mustJSON(t, smallCatalog()))
+	if _, err := New(WithURL(good), WithCacheDir(dir)).Catalog(context.Background()); err != nil {
+		t.Fatalf("seed cache: %v", err)
+	}
+
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(failing.Close)
+
+	c := New(WithURL(failing.URL), WithCacheDir(dir), WithForceRefresh())
+	if _, err := c.Catalog(context.Background()); err == nil {
+		t.Fatal("force refresh must report the fetch failure, not serve the stale cache")
+	}
+}
+
+func TestForceRefreshUpdatesCacheOnSuccess(t *testing.T) {
+	// A successful force refresh writes the fetched bytes to the cache, so a later
+	// ordinary client serves the refreshed data offline.
+	dir := t.TempDir()
+	url, _ := serveBytes(t, mustJSON(t, smallCatalog()))
+	if _, err := New(WithURL(url), WithCacheDir(dir), WithForceRefresh()).Catalog(context.Background()); err != nil {
+		t.Fatalf("force refresh: %v", err)
+	}
+
+	offline := New(WithURL("http://127.0.0.1:0"), WithCacheDir(dir), WithTTL(time.Hour))
+	cat, err := offline.Catalog(context.Background())
+	if err != nil {
+		t.Fatalf("expected cached data served offline: %v", err)
+	}
+	if _, ok := cat.Providers["anthropic"]; !ok {
+		t.Error("refreshed cache missing expected provider")
+	}
+}
+
 func TestCorruptCacheNotServedAsStale(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, cacheFileName), []byte("{not catalog json"), 0o644); err != nil {

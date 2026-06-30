@@ -13,6 +13,38 @@ The repository hosts two independent module systems:
 
 They do not interfere: the Go build ignores `catalog/`, and the CUE module is versioned and published independently of the Go binary.
 
+## CLI
+
+agentdex ships a thin command-line interface over the library.
+
+```
+agentdex list                    detected agents, table by default
+agentdex get <agent>             detail for one agent (aliases: view, show)
+agentdex models <agent> [query]  models available to the agent; query fuzzy-matches
+agentdex refresh [target]        force refresh caches: catalog | models | all
+agentdex version
+agentdex completion              shell completion script
+```
+
+`list` is offline-fast once cached and does not enrich models; pass `--models` to opt in. `get` enriches models and reports provider-env presence by default; `--no-models` skips per-model enrichment while keeping provider-env, and `--tree` prints the config directory tree. Global flags include `--json` (a `status`/`data`/`error`/`warnings` envelope), `--color auto|always|never`, `--search-dir`, and `--bin-path id=path`. The `--fields` flag (field selection) is per-command, available on `list`, `get`, and `models`.
+
+Configuration is optional and lives at `$XDG_CONFIG_HOME/agentdex/config.cue`. See `docs/agentdex-design.md` for the full schema.
+
+## Install
+
+Go:
+
+```
+go install github.com/start-cli/agentdex/cmd/agentdex@latest
+```
+
+Homebrew (once the tap release is published):
+
+```
+brew tap start-cli/tap
+brew install agentdex
+```
+
 ## License
 
 [MPL-2.0](LICENSE).

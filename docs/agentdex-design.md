@@ -718,7 +718,6 @@ Behaviour:
 | --json | Emit a JSON envelope on stdout (long form only; no -j) |
 | --verbose | Add detail to stdout |
 | --quiet | Suppress non-essential output |
-| --no-input | Never prompt; fail fast on missing input |
 | --color | auto, always, never |
 | --debug | Diagnostic logging to stderr |
 | --search-dir | Extra binary search locations; csv and repeatable (StringSlice) |

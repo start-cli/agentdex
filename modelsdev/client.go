@@ -35,11 +35,12 @@ const maxResponseBytes = 64 << 20
 // long-lived Client therefore never re-merges — a refresh is picked up by a
 // freshly constructed Client. Methods are safe for concurrent use.
 type Client struct {
-	httpClient *http.Client
-	url        string
-	cache      cache
-	ttl        time.Duration
-	now        func() time.Time
+	httpClient   *http.Client
+	url          string
+	cache        cache
+	ttl          time.Duration
+	forceRefresh bool
+	now          func() time.Time
 
 	mu       sync.Mutex
 	catalog  *Catalog   // memoised once a usable result is obtained
@@ -72,6 +73,15 @@ func WithCacheDir(dir string) ClientOption {
 // WithTTL overrides the cache TTL.
 func WithTTL(ttl time.Duration) ClientOption {
 	return func(c *Client) { c.ttl = ttl }
+}
+
+// WithForceRefresh makes the client fetch fresh bytes from the network on its next
+// load, ignoring the cache TTL, and report a fetch or decode failure rather than
+// falling back to a stale cache. It is the honest mode for an explicit refresh:
+// the caller learns whether fresh data was actually fetched. A successful fetch
+// still updates the on-disk cache.
+func WithForceRefresh() ClientOption {
+	return func(c *Client) { c.forceRefresh = true }
 }
 
 // WithHTTPClient overrides the package-owned HTTP client, replacing the default
@@ -238,10 +248,12 @@ func (c *Client) afterInflight(call *fetchCall) (*Catalog, error) {
 
 // fetchMerge produces a usable catalog: a within-TTL cache hit, a fresh fetch, or
 // a stale copy served when the fetch fails. It returns an error only on a fetch
-// failure with no cache to fall back on. The returned catalog is merged in place.
+// failure with no cache to fall back on. Under forceRefresh it skips both the
+// within-TTL cache hit and the stale fallback, so the caller learns honestly
+// whether fresh bytes were fetched. The returned catalog is merged in place.
 func (c *Client) fetchMerge(ctx context.Context) (*Catalog, error) {
 	cachedData, modTime, cached := c.cache.read()
-	if cached && c.now().Sub(modTime) < c.ttl {
+	if !c.forceRefresh && cached && c.now().Sub(modTime) < c.ttl {
 		if cat, err := decodeValidate(cachedData); err == nil {
 			merge(cat)
 			return cat, nil
@@ -262,7 +274,7 @@ func (c *Client) fetchMerge(ctx context.Context) (*Catalog, error) {
 		fetchErr = decErr
 	}
 
-	if cached {
+	if !c.forceRefresh && cached {
 		if cat, err := decodeValidate(cachedData); err == nil {
 			merge(cat)
 			return cat, nil
