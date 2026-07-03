@@ -74,7 +74,11 @@ func (a *app) newGetCmd() *cobra.Command {
 				return a.getTree(cmd, agent, warnings)
 			}
 			if !found {
-				return a.fail(cmd, codeNotFound, fmt.Errorf("agent %q (%s) is catalogued but not installed", id, agent.Name), warnings...)
+				// Render the catalogued detail — resolved config paths, providers,
+				// homepage, bin reading "missing" — before the not-installed error,
+				// so a miss still reports everything the catalog knows.
+				err := fmt.Errorf("agent %q (%s) is catalogued but not installed", id, agent.Name)
+				return a.reportAgentError(cmd, agent, fields, codeNotFound, err, warnings)
 			}
 
 			enrich := cfg.EnrichModels
@@ -180,6 +184,9 @@ func (a *app) getCoverage(cmd *cobra.Command, cfg *config.Config, flags config.F
 		return a.fail(cmd, codeFor(err), err, warnings...)
 	}
 	full.Version = agent.Version
+	// Newest release first for display; both the text table and the JSON models
+	// array follow this order.
+	sortModelsNewest(full.Models)
 	if verdict == coverageSomePresent {
 		warnings = append(warnings, fmt.Sprintf("some providers are absent from models.dev: %s", strings.Join(absent, ", ")))
 	}
@@ -201,9 +208,14 @@ func (a *app) getFallthrough(cmd *cobra.Command, client *modelsdev.Client, cat *
 	}
 	a.log.Debug("get fallthrough matched provider", "query", query, "provider", prov.ID)
 
-	var recs []*record
+	models := make([]modelsdev.Model, 0, len(prov.Models))
 	for _, key := range sortedKeys(prov.Models) {
-		recs = append(recs, modelRecord(prov.Models[key], prov.ID, ""))
+		models = append(models, prov.Models[key])
+	}
+	sortModelsNewest(models)
+	recs := make([]*record, len(models))
+	for i, m := range models {
+		recs[i] = modelRecord(m, prov.ID, "")
 	}
 	data := map[string]any{
 		"provider": prov.ID,
@@ -214,6 +226,9 @@ func (a *app) getFallthrough(cmd *cobra.Command, client *modelsdev.Client, cat *
 	note := fmt.Errorf("%q is not a catalogued agent; showing models.dev provider %q (install details unavailable, not catalogued)", query, prov.ID)
 	return a.failData(cmd, codeNotFound, note, data, func(w io.Writer) {
 		renderTable(w, headers, rows, "No models.")
+		if len(rows) > 0 {
+			renderPriceFooter(w, modelFieldSet.defaults)
+		}
 	}, warnings)
 }
 
@@ -283,6 +298,12 @@ func renderAgentDetail(w io.Writer, agent *agentdex.Agent, verbose bool) {
 		if f.key == "found" && !verbose {
 			continue
 		}
+		// The bin line always states presence, mirroring provider env's (set)/(unset):
+		// a found agent shows the path with "(found)", a not-installed one already
+		// reads "missing" from the record.
+		if f.key == "bin" && agent.Found {
+			f.text += " (found)"
+		}
 		if verbose {
 			if note := existenceNote(f.key, agent); note != "" {
 				f.text += " (" + note + ")"
@@ -306,6 +327,7 @@ func renderAgentDetail(w io.Writer, agent *agentdex.Agent, verbose bool) {
 		}
 		_, headers, rows, _ := tabulate(recs, nil, modelFieldSet.defaults, modelFieldSet)
 		renderTable(w, headers, rows, "  (none)")
+		renderPriceFooter(w, modelFieldSet.defaults)
 	}
 }
 

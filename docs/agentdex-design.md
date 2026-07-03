@@ -690,7 +690,15 @@ known agent (see Output and exit codes).
 Behaviour:
 
 - `list` does not enrich models by default (fast, offline once cached). `--models`
-  opts in.
+  opts in. `--all` additionally lists catalogued agents whose binary was not
+  found: detected agents first, then the missing tail by id, with `missing` in
+  the BIN column and `-` in VERSION (the library's IncludeMissing option; in
+  JSON these rows carry `found: false` with a blank bin). The BIN column is part
+  of the default list columns, last because it is the widest.
+- Model listings (get's Models section and `models`) render newest release first
+  (descending release_date, ties by id) and carry a muted footer naming the
+  pricing unit: `Prices in USD per 1M tokens (models.dev)`. Both are text-surface
+  presentation; JSON model arrays follow the same order but carry raw numbers.
 - `get <agent>` enriches models and reports provider env presence by default.
   `--no-models` opts out of the per-model enrichment; provider-env still shows, since
   it needs only the providers map. `--tree` prints the config directory tree (no
@@ -720,7 +728,7 @@ Behaviour:
 | --quiet | Suppress non-essential output |
 | --color | auto, always, never |
 | --debug | Diagnostic logging to stderr |
-| --search-dir | Extra binary search locations; csv and repeatable (StringSlice) |
+| --search-dir | Extra binary search locations; repeatable, values taken literally (StringArray, so a path may contain a comma) |
 | --bin-path | Override a specific agent's binary path; format id=path, repeatable |
 
 ### Output and exit codes
@@ -738,7 +746,11 @@ Behaviour:
   that provider's models.dev data, labelled as provider data, exit 3; a query that
   matches neither a catalog agent nor a models.dev provider is genuinely unknown,
   exit 2 (`ErrAgentUnknown`). A known catalog agent that is not installed is not
-  found, exit 3.
+  found, exit 3, but still renders the catalogued detail first (resolved config
+  paths, providers, homepage, bin reading `missing`); under --json the envelope
+  carries both the data and the error. In get's text detail the bin line always
+  states presence — the path with `(found)`, or `missing` — mirroring provider
+  env's `(set)`/`(unset)`.
 - Transient exit 75 applies when a command has no usable result at all: the catalog
   cannot be loaded, or a model-centric command (`models`) cannot reach models.dev
   with no cache. A `get` whose detection already succeeded degrades with a warning
@@ -999,8 +1011,9 @@ start and library project files) rather than landing everything in one change.
 - The catalog id is the map key; #KnownAgent has no id field. The loader sets the
   Go ID from the key.
 - --json is long form only; no -j.
-- --search-dir is csv and repeatable; --bin-path overrides a specific agent's
-  binary path (id=path) and wins over PATH and search dirs.
+- --search-dir is repeatable with values taken literally (no csv split; a path
+  may contain a comma); --bin-path overrides a specific agent's binary path
+  (id=path) and wins over PATH and search dirs.
 - Agent catalog authoring and the skills discovery command are separate projects,
   not part of the core build.
 - Platforms: Linux, macOS, WSL (Linux-native installs only; no Windows-host interop).

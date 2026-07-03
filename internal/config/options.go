@@ -8,7 +8,7 @@ import (
 )
 
 // Flags carries the global flag values that feed into option mapping.
-// SearchDirs is the already-split list from --search-dir; BinPaths the parsed
+// SearchDirs is the repeated values from --search-dir; BinPaths the parsed
 // id=path map from --bin-path. Both merge with their config.cue counterparts,
 // with the flag values taking precedence on a key collision.
 type Flags struct {

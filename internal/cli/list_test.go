@@ -78,16 +78,20 @@ func TestListValidButAbsentFieldResolvesBlank(t *testing.T) {
 }
 
 func TestListVerboseAddsColumns(t *testing.T) {
-	// --verbose widens the default columns with bin and config; plain list shows
-	// neither header. --json is unaffected (it always carries the full record).
+	// --verbose widens the default columns with config; plain list shows bin (a
+	// default column) but not config. --json is unaffected (it always carries the
+	// full record).
 	newScenario(t, "", "alpha-cli")
 
 	plain := runCLI("list")
 	if plain.code != codeOK {
 		t.Fatalf("list exit = %d, stderr=%q", plain.code, plain.stderr)
 	}
-	if strings.Contains(plain.stdout, "BIN") || strings.Contains(plain.stdout, "CONFIG") {
-		t.Errorf("plain list should not show bin/config columns:\n%s", plain.stdout)
+	if !strings.Contains(plain.stdout, "BIN") {
+		t.Errorf("plain list should show the bin column:\n%s", plain.stdout)
+	}
+	if strings.Contains(plain.stdout, "CONFIG") {
+		t.Errorf("plain list should not show the config column:\n%s", plain.stdout)
 	}
 
 	verbose := runCLI("list", "--verbose")
@@ -105,6 +109,59 @@ func TestListVerboseAddsColumns(t *testing.T) {
 	jsonVerbose := runCLI("--json", "list", "--verbose")
 	if jsonPlain.stdout != jsonVerbose.stdout {
 		t.Errorf("--verbose changed list --json output:\nplain:\n%s\nverbose:\n%s", jsonPlain.stdout, jsonVerbose.stdout)
+	}
+}
+
+func TestListAllIncludesMissingAgents(t *testing.T) {
+	// --all adds the catalogued-but-not-installed agents after the detected ones,
+	// with "missing" in the bin cell; the plain list keeps omitting them. In JSON
+	// the missing rows carry found:false and a blank bin, never the "missing"
+	// marker (a text-surface affordance only).
+	newScenario(t, "", "beta-tool")
+
+	plain := runCLI("list")
+	if plain.code != codeOK {
+		t.Fatalf("list exit = %d, stderr=%q", plain.code, plain.stderr)
+	}
+	if strings.Contains(plain.stdout, "alpha-cli") || strings.Contains(plain.stdout, "missing") {
+		t.Errorf("plain list should omit missing agents:\n%s", plain.stdout)
+	}
+
+	all := runCLI("list", "--all")
+	if all.code != codeOK {
+		t.Fatalf("list --all exit = %d, stderr=%q", all.code, all.stderr)
+	}
+	for _, want := range []string{"alpha-cli", "beta-tool", "gamma-agent", "missing"} {
+		if !strings.Contains(all.stdout, want) {
+			t.Errorf("list --all missing %q:\n%s", want, all.stdout)
+		}
+	}
+	// Detected agents read first: beta-tool (installed) above the missing tail.
+	if strings.Index(all.stdout, "beta-tool") > strings.Index(all.stdout, "alpha-cli") {
+		t.Errorf("list --all should order detected agents first:\n%s", all.stdout)
+	}
+
+	got := runCLI("--json", "list", "--all")
+	if got.code != codeOK {
+		t.Fatalf("list --all --json exit = %d, stderr=%q", got.code, got.stderr)
+	}
+	rows := got.envelope(t).Data.([]any)
+	if len(rows) != 3 {
+		t.Fatalf("list --all rows = %d, want 3", len(rows))
+	}
+	byID := map[string]map[string]any{}
+	for _, r := range rows {
+		row := r.(map[string]any)
+		byID[row["id"].(string)] = row
+	}
+	if found, _ := byID["beta-tool"]["found"].(bool); !found {
+		t.Errorf("beta-tool found = %v, want true", byID["beta-tool"]["found"])
+	}
+	if found, _ := byID["alpha-cli"]["found"].(bool); found {
+		t.Errorf("alpha-cli found = %v, want false", byID["alpha-cli"]["found"])
+	}
+	if bin := byID["alpha-cli"]["bin"]; bin != "" {
+		t.Errorf("missing agent bin = %v, want blank", bin)
 	}
 }
 

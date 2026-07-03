@@ -86,12 +86,36 @@ func TestGetTopLevelSchemaIsDataErrorNotOutage(t *testing.T) {
 }
 
 func TestGetNotInstalled(t *testing.T) {
+	// A catalogued-but-not-installed agent still exits 3, but renders everything
+	// the catalog knows first: the detail with a "missing" bin to stdout, the
+	// error to stderr. Under --json the envelope carries both data and error.
 	srv := modelsServer(t, []string{"anthropic"})
 	newScenario(t, srv.URL) // no binaries installed
 
 	got := runCLI("get", "alpha-cli")
 	if got.code != codeNotFound {
 		t.Fatalf("not-installed exit = %d, want 3; stderr=%q", got.code, got.stderr)
+	}
+	for _, want := range []string{"alpha-cli", "missing", ".alpha"} {
+		if !strings.Contains(got.stdout, want) {
+			t.Errorf("not-installed detail missing %q:\n%s", want, got.stdout)
+		}
+	}
+	if !strings.Contains(got.stderr, "not installed") {
+		t.Errorf("not-installed error missing from stderr: %q", got.stderr)
+	}
+
+	js := runCLI("--json", "get", "alpha-cli")
+	if js.code != codeNotFound {
+		t.Fatalf("not-installed --json exit = %d, want 3", js.code)
+	}
+	env := js.envelope(t)
+	if env.Status != "error" || !strings.Contains(env.Error, "not installed") {
+		t.Errorf("envelope status/error = %q/%q, want error naming not installed", env.Status, env.Error)
+	}
+	data, ok := env.Data.(map[string]any)
+	if !ok || data["found"] != false || data["bin"] != "" {
+		t.Errorf("envelope data = %v, want found=false with blank bin", env.Data)
 	}
 }
 
@@ -170,15 +194,20 @@ func TestGetVerboseAddsDetail(t *testing.T) {
 	if plain.code != codeOK {
 		t.Fatalf("get exit = %d, stderr=%q", plain.code, plain.stderr)
 	}
-	if strings.Contains(plain.stdout, "found") {
-		t.Errorf("plain get should not show found:\n%s", plain.stdout)
+	// The found field key sits at the start of its detail line; the bin line's
+	// "(found)" presence annotation is a different, always-on surface.
+	if strings.Contains(plain.stdout, "\nfound") {
+		t.Errorf("plain get should not show the found field:\n%s", plain.stdout)
+	}
+	if !strings.Contains(plain.stdout, "(found)") {
+		t.Errorf("plain get should annotate the bin line with (found):\n%s", plain.stdout)
 	}
 
 	verbose := runCLI("get", "alpha-cli", "--verbose")
 	if verbose.code != codeOK {
 		t.Fatalf("get --verbose exit = %d, stderr=%q", verbose.code, verbose.stderr)
 	}
-	if !strings.Contains(verbose.stdout, "found") {
+	if !strings.Contains(verbose.stdout, "\nfound") {
 		t.Errorf("get --verbose should show the found field:\n%s", verbose.stdout)
 	}
 	if !strings.Contains(verbose.stdout, "exists") && !strings.Contains(verbose.stdout, "missing") {
@@ -209,7 +238,7 @@ func TestGetTextDetailDrivenByRecord(t *testing.T) {
 			t.Errorf("text detail missing field %q:\n%s", key, got.stdout)
 		}
 	}
-	if strings.Contains(got.stdout, "found") {
+	if strings.Contains(got.stdout, "\nfound") {
 		t.Errorf("text detail should not render the found field inline:\n%s", got.stdout)
 	}
 }

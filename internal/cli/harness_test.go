@@ -207,6 +207,15 @@ func modelsCatalog(present, malformed []string) []byte {
 	return data
 }
 
+// providerReleaseDates gives each fixture provider's model a distinct release
+// date, so newest-first ordering is observable across providers: openai's model
+// is newer than google's even though google sorts first by id.
+var providerReleaseDates = map[string]string{
+	"anthropic": "2025-06-01",
+	"google":    "2024-01-01",
+	"openai":    "2025-01-01",
+}
+
 // provider builds one provider with a single model. anthropic carries the
 // "claude-sonnet" model so the canonical-id path resolves; other providers carry a
 // generic model. A malformed provider's model has a zero limit.
@@ -225,10 +234,11 @@ func provider(pid string, malformed bool) modelsdev.Provider {
 		Env:  []string{strings.ToUpper(pid) + "_API_KEY"},
 		Models: map[string]modelsdev.Model{
 			key: {
-				ID:    key,
-				Name:  name,
-				Limit: limit,
-				Cost:  &modelsdev.Cost{Input: 3, Output: 15},
+				ID:          key,
+				Name:        name,
+				ReleaseDate: providerReleaseDates[pid],
+				Limit:       limit,
+				Cost:        &modelsdev.Cost{Input: 3, Output: 15},
 			},
 		},
 	}

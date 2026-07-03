@@ -50,10 +50,10 @@ func workingDir() string {
 const maxConcurrentDetections = 16
 
 // detectAll runs every non-disabled catalog entry through the engine
-// concurrently, omitting agents whose binary was not found, and returns the rest
-// sorted by id. The first non-degradable error (a models.dev schema fault)
-// cancels the remaining work and is returned. Concurrency is bounded by
-// maxConcurrentDetections.
+// concurrently, omitting agents whose binary was not found (unless the config
+// includes missing agents), and returns the rest sorted by id. The first
+// non-degradable error (a models.dev schema fault) cancels the remaining work
+// and is returned. Concurrency is bounded by maxConcurrentDetections.
 func detectAll(ctx context.Context, cat *Catalog, cfg *config) ([]Agent, error) {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -76,7 +76,7 @@ func detectAll(ctx context.Context, cat *Catalog, cfg *config) ([]Agent, error) 
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			a, err := detectAgent(ctx, id, ka, cfg, env, true)
+			a, err := detectAgent(ctx, id, ka, cfg, env, !cfg.includeMissing)
 			mu.Lock()
 			defer mu.Unlock()
 			switch {

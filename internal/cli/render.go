@@ -72,6 +72,23 @@ func renderTable(w io.Writer, headers []string, rows [][]string, empty string) {
 	t.Render(w)
 }
 
+// priceUnitNote is the muted footer printed under any surface that showed
+// per-model pricing, so the bare "$3" cells are never ambiguous about unit or
+// currency.
+const priceUnitNote = "Prices in USD per 1M tokens (models.dev)"
+
+// renderPriceFooter writes the pricing-unit footer when the rendered columns
+// include a price. It is a text-surface affordance only; JSON carries raw
+// numbers under documented keys.
+func renderPriceFooter(w io.Writer, cols []string) {
+	for _, c := range cols {
+		if c == "input" || c == "output" {
+			fmt.Fprintln(w, tui.Muted.Sprint(priceUnitNote))
+			return
+		}
+	}
+}
+
 // renderFields writes a single record's selected fields for scripting: a lone
 // field prints its bare value (so --fields canonical_id is pipe-friendly), several
 // print "key: value" lines.

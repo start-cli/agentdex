@@ -27,16 +27,17 @@ type ModelsOption func(*modelsConfig)
 // User config and flags map entirely through options, so the engine keeps no
 // direct dependency on internal/catalog beyond loader construction.
 type config struct {
-	preloaded     *Catalog
-	catalogModule string
-	catalogTTL    time.Duration
-	catalogTTLSet bool
-	cacheDir      string
-	skipVersion   bool
-	searchDirs    []string
-	binPaths      map[string]string
-	disabled      map[string]struct{}
-	models        *modelsConfig
+	preloaded      *Catalog
+	catalogModule  string
+	catalogTTL     time.Duration
+	catalogTTLSet  bool
+	cacheDir       string
+	skipVersion    bool
+	includeMissing bool
+	searchDirs     []string
+	binPaths       map[string]string
+	disabled       map[string]struct{}
+	models         *modelsConfig
 }
 
 // modelsConfig holds the attached models.dev client and whether per-model
@@ -85,6 +86,14 @@ func EnrichModels() ModelsOption {
 // Version is left empty.
 func WithSkipVersion() Option {
 	return func(cfg *config) { cfg.skipVersion = true }
+}
+
+// IncludeMissing makes Detect also return catalogued agents whose binary was
+// not found, populated from the catalog with Found false and an empty Version,
+// instead of omitting them. DetectOne is unaffected: it always answers for any
+// catalogued id.
+func IncludeMissing() Option {
+	return func(cfg *config) { cfg.includeMissing = true }
 }
 
 // WithSearchDirs adds binary search locations consulted after PATH.
@@ -142,7 +151,8 @@ func WithCacheDir(dir string) Option {
 }
 
 // Detect runs every catalog entry through the detection engine and returns the
-// agents found, sorted by id. Not-installed agents are omitted.
+// agents found, sorted by id. Not-installed agents are omitted unless
+// IncludeMissing is supplied.
 func Detect(ctx context.Context, opts ...Option) ([]Agent, error) {
 	cfg := newConfig(opts...)
 	cat, err := cfg.resolveCatalog(ctx)

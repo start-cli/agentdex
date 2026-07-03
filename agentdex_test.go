@@ -55,6 +55,40 @@ func TestDetectOmitsNotFoundAndSortsByID(t *testing.T) {
 	}
 }
 
+func TestDetectIncludeMissingKeepsNotFound(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	dir := t.TempDir()
+	alphaBin := writeStub(t, dir, "alpha", "alpha 1.0.0")
+
+	cat := &Catalog{Agents: map[string]KnownAgent{
+		"alpha": {Name: "Alpha", Bin: "alpha", Config: PathPair{Global: "~/.alpha"}},
+		"beta": {Name: "Beta", Bin: "beta-not-installed", Config: PathPair{Global: "~/.beta"},
+			Version: ptr(VersionProbe{Args: []string{"--version"}, Pattern: `([0-9.]+)`})},
+	}}
+
+	agents, err := Detect(context.Background(),
+		WithCatalog(cat),
+		WithBinPaths(map[string]string{"alpha": alphaBin}),
+		IncludeMissing(),
+	)
+	if err != nil {
+		t.Fatalf("Detect: %v", err)
+	}
+	if len(agents) != 2 {
+		t.Fatalf("got %d agents, want 2 (beta kept as missing)", len(agents))
+	}
+	beta := agents[1]
+	if beta.ID != "beta" || beta.Found {
+		t.Fatalf("agents[1] = %q found=%v, want beta found=false", beta.ID, beta.Found)
+	}
+	if beta.BinaryPath != "" || beta.Version != "" {
+		t.Errorf("missing agent bin=%q version=%q, want both empty (no version exec)", beta.BinaryPath, beta.Version)
+	}
+	if beta.Config.Global == "" {
+		t.Errorf("missing agent config global empty, want resolved from catalog")
+	}
+}
+
 func TestDetectWithDisabled(t *testing.T) {
 	t.Setenv("HOME", t.TempDir())
 	dir := t.TempDir()

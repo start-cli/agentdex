@@ -16,12 +16,14 @@ import (
 // surfaces stay in step when a field is added or renamed.
 var agentFieldSet = newFieldSet(
 	[]string{"id", "name", "version", "bin", "found", "config", "config_local", "skills", "providers", "homepage", "provider_env", "models"},
-	[]string{"id", "name", "version", "providers"},
+	[]string{"id", "name", "version", "providers", "bin"},
 )
 
 // agentVerboseFields are the list table columns under --verbose: the default
-// columns widened with the binary path and the global config dir.
-var agentVerboseFields = []string{"id", "name", "version", "bin", "config", "providers"}
+// columns widened with the global config dir. bin stays last in both sets: it is
+// the widest, most variable column, and under list --all its "missing" cell is
+// the detection signal.
+var agentVerboseFields = []string{"id", "name", "version", "config", "providers", "bin"}
 
 // agentRecord builds the field values for one detected agent. Optional fields that
 // are absent (no local config, no skills concept, no enrichment) are simply not
@@ -31,7 +33,13 @@ func agentRecord(a *agentdex.Agent) *record {
 	r.add("id", a.ID, a.ID)
 	r.add("name", a.Name, a.Name)
 	r.add("version", a.Version, orDash(a.Version))
-	r.add("bin", a.BinaryPath, orDash(a.BinaryPath))
+	// A not-found agent renders "missing" in the bin cell (the list --all
+	// detection signal); the JSON value stays blank with found carrying the fact.
+	binText := orDash(a.BinaryPath)
+	if !a.Found {
+		binText = "missing"
+	}
+	r.add("bin", a.BinaryPath, binText)
 	r.add("found", a.Found, fmt.Sprintf("%t", a.Found))
 	r.add("config", a.Config.Global, orDash(a.Config.Global))
 	// config_local and skills are added here, in their declared position, so the add
@@ -90,6 +98,28 @@ func modelRecord(m modelsdev.Model, providerID, canonicalID string) *record {
 		r.add("canonical_id", canonicalID, canonicalID)
 	}
 	return r
+}
+
+// newerModel reports whether a sorts before b in a newest-first model listing:
+// later release_date first (ISO dates compare lexically), undated models last,
+// ties broken by id so the order stays deterministic.
+func newerModel(a, b modelsdev.Model) bool {
+	if a.ReleaseDate != b.ReleaseDate {
+		if a.ReleaseDate == "" {
+			return false
+		}
+		if b.ReleaseDate == "" {
+			return true
+		}
+		return a.ReleaseDate > b.ReleaseDate
+	}
+	return a.ID < b.ID
+}
+
+// sortModelsNewest orders models newest release first for display. This is a
+// presentation choice of the CLI: the library keeps its stable by-id order.
+func sortModelsNewest(models []modelsdev.Model) {
+	sort.SliceStable(models, func(i, j int) bool { return newerModel(models[i], models[j]) })
 }
 
 type costKind int

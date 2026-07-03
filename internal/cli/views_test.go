@@ -33,3 +33,20 @@ func TestCostValueUnknownIsNil(t *testing.T) {
 		t.Errorf("costValue(nil) = %v, want nil so JSON pricing is null not zero", got)
 	}
 }
+
+func TestSortModelsNewestFirst(t *testing.T) {
+	// Newest release first, undated models last, ties broken by id.
+	models := []modelsdev.Model{
+		{ID: "undated"},
+		{ID: "old", ReleaseDate: "2024-01-15"},
+		{ID: "new-b", ReleaseDate: "2025-06-01"},
+		{ID: "new-a", ReleaseDate: "2025-06-01"},
+	}
+	sortModelsNewest(models)
+	want := []string{"new-a", "new-b", "old", "undated"}
+	for i, id := range want {
+		if models[i].ID != id {
+			t.Fatalf("order[%d] = %q, want %q (full: %v)", i, models[i].ID, id, models)
+		}
+	}
+}

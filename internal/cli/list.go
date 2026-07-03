@@ -2,6 +2,7 @@ package cli
 
 import (
 	"io"
+	"sort"
 
 	"github.com/spf13/cobra"
 
@@ -10,12 +11,15 @@ import (
 
 func (a *app) newListCmd() *cobra.Command {
 	var models bool
+	var all bool
 	var fields []string
 	cmd := &cobra.Command{
 		Use:   "list",
 		Short: "List detected agents",
-		Long: "List the AI coding agents detected on this machine. Model enrichment is " +
-			"off by default to stay offline-fast once the catalog is cached; --models opts in.",
+		Long: "List the AI coding agents detected on this machine. --all adds the catalogued " +
+			"agents whose binary was not found, with \"missing\" in the BIN column. Model " +
+			"enrichment is off by default to stay offline-fast once the catalog is cached; " +
+			"--models opts in.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := a.requireConfig()
@@ -37,6 +41,9 @@ func (a *app) newListCmd() *cobra.Command {
 			}
 
 			opts := append(cfg.LibraryOptions(flags), agentdex.WithCatalog(cat))
+			if all {
+				opts = append(opts, agentdex.IncludeMissing())
+			}
 			if models {
 				// list attaches a client only under --models so a default list never
 				// blocks on the network.
@@ -47,7 +54,11 @@ func (a *app) newListCmd() *cobra.Command {
 			if err != nil {
 				return a.fail(cmd, codeFor(err), err)
 			}
-			a.log.Debug("list detected agents", "count", len(agents), "models", models)
+			a.log.Debug("list detected agents", "count", len(agents), "models", models, "all", all)
+
+			// Under --all, detected agents read first; the not-found tail keeps the
+			// library's by-id order within each group.
+			sort.SliceStable(agents, func(i, j int) bool { return agents[i].Found && !agents[j].Found })
 
 			recs := make([]*record, len(agents))
 			for i := range agents {
@@ -77,11 +88,16 @@ func (a *app) newListCmd() *cobra.Command {
 			if err != nil {
 				return a.usage(cmd, err)
 			}
+			empty := "No agents detected."
+			if all {
+				empty = "No agents catalogued."
+			}
 			return a.ok(cmd, data, warnings, func(w io.Writer) {
-				renderTable(w, headers, rows, "No agents detected.")
+				renderTable(w, headers, rows, empty)
 			})
 		},
 	}
+	cmd.Flags().BoolVar(&all, "all", false, "Include catalogued agents that were not detected")
 	cmd.Flags().BoolVar(&models, "models", false, "Enrich each agent with its models.dev models")
 	cmd.Flags().StringSliceVar(&fields, "fields", nil, "Select output fields (csv)")
 	return cmd

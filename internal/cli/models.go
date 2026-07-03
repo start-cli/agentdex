@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -72,10 +73,12 @@ func (a *app) modelsOne(cmd *cobra.Command, cat *agentdex.Catalog, id, query str
 	}
 	return a.ok(cmd, jsonObject(fs), warnings, func(w io.Writer) {
 		if len(fields) > 0 {
+			// --fields is the scripting surface: bare values, no footer.
 			renderFields(w, fs)
 			return
 		}
 		renderDetail(w, fs)
+		renderPriceFooter(w, modelFieldSet.all)
 	})
 }
 
@@ -89,7 +92,14 @@ func (a *app) modelsList(cmd *cobra.Command, providers []string, client *modelsd
 		return a.fail(cmd, modelsCode(err), err, warnings...)
 	}
 
-	var recs []*record
+	// Collect first, then order newest release first across all providers; the
+	// records are built from the sorted listing so text and JSON agree.
+	type entry struct {
+		m         modelsdev.Model
+		pid       string
+		canonical string
+	}
+	var entries []entry
 	for _, pid := range providers {
 		p, found, err := client.Provider(ctx, pid)
 		if err != nil {
@@ -105,8 +115,13 @@ func (a *app) modelsList(cmd *cobra.Command, providers []string, client *modelsd
 			if _, ok := agnostic.Models[composite]; ok {
 				canonical = composite
 			}
-			recs = append(recs, modelRecord(p.Models[key], pid, canonical))
+			entries = append(entries, entry{m: p.Models[key], pid: pid, canonical: canonical})
 		}
+	}
+	sort.SliceStable(entries, func(i, j int) bool { return newerModel(entries[i].m, entries[j].m) })
+	recs := make([]*record, len(entries))
+	for i, e := range entries {
+		recs[i] = modelRecord(e.m, e.pid, e.canonical)
 	}
 
 	// The text table shows the declared default columns unless --fields overrides;
@@ -121,6 +136,9 @@ func (a *app) modelsList(cmd *cobra.Command, providers []string, client *modelsd
 	}
 	return a.ok(cmd, data, warnings, func(w io.Writer) {
 		renderTable(w, headers, rows, "No models available.")
+		if len(rows) > 0 {
+			renderPriceFooter(w, tableCols)
+		}
 	})
 }
 

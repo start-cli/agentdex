@@ -91,6 +91,48 @@ func TestModelsListJSONCarriesFullRecord(t *testing.T) {
 	}
 }
 
+func TestModelsListNewestFirst(t *testing.T) {
+	// gamma-agent's providers carry one model each; openai's fixture model is
+	// newer than google's, so it lists first even though google-model sorts first
+	// by id. JSON follows the same order.
+	srv := modelsServer(t, []string{"google", "openai"})
+	newScenario(t, srv.URL, "gamma-agent")
+
+	got := runCLI("models", "gamma-agent")
+	if got.code != codeOK {
+		t.Fatalf("models list exit = %d, stderr=%q", got.code, got.stderr)
+	}
+	if strings.Index(got.stdout, "openai-model") > strings.Index(got.stdout, "google-model") {
+		t.Errorf("models list should order newest release first:\n%s", got.stdout)
+	}
+
+	js := runCLI("--json", "models", "gamma-agent")
+	rows := js.envelope(t).Data.([]any)
+	if len(rows) != 2 || rows[0].(map[string]any)["id"] != "openai-model" {
+		t.Errorf("models --json order = %v, want openai-model first", rows)
+	}
+}
+
+func TestModelsListPriceFooter(t *testing.T) {
+	// A table showing price columns carries the unit footer; a --fields selection
+	// without a price column stays footer-free (it is the scripting surface).
+	srv := modelsServer(t, []string{"anthropic"})
+	newScenario(t, srv.URL, "alpha-cli")
+
+	got := runCLI("models", "alpha-cli")
+	if got.code != codeOK {
+		t.Fatalf("models list exit = %d, stderr=%q", got.code, got.stderr)
+	}
+	if !strings.Contains(got.stdout, priceUnitNote) {
+		t.Errorf("models list missing the price footer:\n%s", got.stdout)
+	}
+
+	noPrices := runCLI("models", "alpha-cli", "--fields", "id,name")
+	if strings.Contains(noPrices.stdout, priceUnitNote) {
+		t.Errorf("--fields without price columns should omit the footer:\n%s", noPrices.stdout)
+	}
+}
+
 func TestModelsTransientWhenUnreachable(t *testing.T) {
 	newScenario(t, closedModelsServer(t), "alpha-cli")
 

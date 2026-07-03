@@ -150,6 +150,23 @@ func TestMalformedBinPathIsUsageError(t *testing.T) {
 	}
 }
 
+func TestSearchDirValueTakenLiterally(t *testing.T) {
+	// --search-dir is a StringArray: a directory path containing a comma is one
+	// location, never csv-split into two bogus entries.
+	s := newScenario(t, "")
+	commaDir := filepath.Join(s.home, "odd,dir")
+	mustMkdir(t, commaDir)
+	installFakeBin(t, commaDir, "alpha-cli")
+
+	got := runCLI("list", "--search-dir", commaDir)
+	if got.code != codeOK {
+		t.Fatalf("list --search-dir exit = %d, stderr=%q", got.code, got.stderr)
+	}
+	if !strings.Contains(got.stdout, "alpha-cli") {
+		t.Errorf("agent in a comma-containing search dir not detected:\n%s", got.stdout)
+	}
+}
+
 // configBody builds a config.cue with the standard search dir and models URL plus
 // extra lines, for tests that need a bespoke configuration.
 func configBody(modelsURL, binDir, extra string) string {

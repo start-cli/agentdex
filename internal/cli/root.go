@@ -59,7 +59,9 @@ func NewRootCommand() *cobra.Command {
 	f.BoolVar(&a.quiet, "quiet", false, "Suppress non-essential output")
 	f.StringVar(&a.color, "color", "auto", "Colour output: auto, always, never")
 	f.BoolVar(&a.debug, "debug", false, "Diagnostic logging to stderr")
-	f.StringSliceVar(&a.searchDirs, "search-dir", nil, "Extra binary search locations (csv, repeatable)")
+	// StringArray, not StringSlice: a directory path can legally contain a comma,
+	// so values are taken literally rather than csv-split, matching --bin-path.
+	f.StringArrayVar(&a.searchDirs, "search-dir", nil, "Extra binary search locations (repeatable)")
 	f.StringArrayVar(&a.binPaths, "bin-path", nil, "Override an agent's binary path as id=path (repeatable)")
 
 	root.AddCommand(
