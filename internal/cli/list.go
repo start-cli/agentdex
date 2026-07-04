@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"fmt"
 	"io"
 	"sort"
 
@@ -14,8 +15,9 @@ func (a *app) newListCmd() *cobra.Command {
 	var all bool
 	var fields []string
 	cmd := &cobra.Command{
-		Use:   "list",
-		Short: "List detected agents",
+		Use:     "list",
+		GroupID: groupCore,
+		Short:   "List detected agents",
 		Long: "List the AI coding agents detected on this machine. --all adds the catalogued " +
 			"agents whose binary was not found, with \"missing\" in the BIN column. Model " +
 			"enrichment is off by default to stay offline-fast once the catalog is cached; " +
@@ -93,6 +95,7 @@ func (a *app) newListCmd() *cobra.Command {
 				empty = "No agents catalogued."
 			}
 			return a.ok(cmd, data, warnings, func(w io.Writer) {
+				fmt.Fprintln(w)
 				renderTable(w, headers, rows, empty)
 			})
 		},

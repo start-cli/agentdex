@@ -16,8 +16,9 @@ var refreshTargets = map[string]bool{"catalog": true, "models": true, "all": tru
 
 func (a *app) newRefreshCmd() *cobra.Command {
 	cmd := &cobra.Command{
-		Use:   "refresh [target]",
-		Short: "Force a cache refresh: catalog, models, or all",
+		Use:     "refresh [target]",
+		GroupID: groupCore,
+		Short:   "Force a cache refresh: catalog, models, or all",
 		Long: "Force a refresh of the cached catalog version and/or the models.dev " +
 			"catalog. The target defaults to all.",
 		Args: cobra.MaximumNArgs(1),

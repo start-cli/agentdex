@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"github.com/start-cli/agentdex"
+	"github.com/start-cli/agentdex/internal/tui"
 	"github.com/start-cli/agentdex/modelsdev"
 )
 
@@ -170,8 +171,19 @@ func orDash(s string) string {
 }
 
 // formatProviderEnv renders the provider-env map deterministically as
-// "VAR (set|unset)" entries in sorted key order.
+// "VAR (set|unset)" entries in sorted key order. It stays plain so record text,
+// table cells, and --fields output carry no colour codes.
 func formatProviderEnv(env map[string]bool) string {
+	return providerEnvText(env, plainState)
+}
+
+// styledProviderEnv is formatProviderEnv with the state markers coloured for the
+// detail section: (set) green, (unset) yellow.
+func styledProviderEnv(env map[string]bool) string {
+	return providerEnvText(env, styledState)
+}
+
+func providerEnvText(env map[string]bool, state func(string, bool) string) string {
 	keys := make([]string, 0, len(env))
 	for k := range env {
 		keys = append(keys, k)
@@ -179,14 +191,29 @@ func formatProviderEnv(env map[string]bool) string {
 	sort.Strings(keys)
 	parts := make([]string, len(keys))
 	for i, k := range keys {
-		state := "unset"
+		text, good := "unset", false
 		if env[k] {
-			state = "set"
+			text, good = "set", true
 		}
-		parts[i] = fmt.Sprintf("%s (%s)", k, state)
+		parts[i] = k + " " + state(text, good)
 	}
 	if len(parts) == 0 {
 		return "-"
 	}
 	return strings.Join(parts, ", ")
+}
+
+func plainState(state string, _ bool) string {
+	return "(" + state + ")"
+}
+
+// styledState renders a bracketed state marker per the start terminal colour
+// standard: cyan delimiters, with the state text green when positive and yellow
+// when negative.
+func styledState(state string, good bool) string {
+	inner := tui.Warn
+	if good {
+		inner = tui.Good
+	}
+	return tui.Delim.Sprint("(") + inner.Sprint(state) + tui.Delim.Sprint(")")
 }

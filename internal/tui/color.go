@@ -36,11 +36,22 @@ func Configure(mode string, out *os.File) {
 // unchanged.
 var (
 	// Header styles table headers and section titles.
-	Header = color.New(color.Bold)
+	Header = color.New(color.Bold, color.FgGreen)
 	// Label styles a field label in a detail view.
 	Label = color.New(color.FgCyan)
 	// Muted styles secondary or absent values.
 	Muted = color.New(color.Faint)
-	// Warn styles warning text.
+	// Warn styles warning text and negative state markers (missing, unset).
 	Warn = color.New(color.FgYellow)
+	// Path styles filesystem paths. White, not the start standard's HiCyan: the
+	// detail view's field labels are already cyan, and two cyans side by side on
+	// every path line read as one.
+	Path = color.New(color.FgHiWhite)
+	// Good styles positive state markers (found, set, exists).
+	Good = color.New(color.FgGreen)
+	// Delim styles bracketing delimiters around metadata; the bracketed text
+	// carries its own colour.
+	Delim = color.New(color.FgCyan)
+	// URL styles web addresses.
+	URL = color.New(color.FgBlue)
 )

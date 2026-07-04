@@ -21,6 +21,10 @@ import (
 	"github.com/start-cli/agentdex/internal/tui"
 )
 
+// groupCore is the help group carrying every real command, so only cobra's
+// built-in help and completion fall under Additional Commands.
+const groupCore = "core"
+
 // app holds the resolved global flag values and the loaded configuration for one
 // invocation. Subcommands close over it for the shared output, config, and logger.
 type app struct {
@@ -64,6 +68,9 @@ func NewRootCommand() *cobra.Command {
 	f.StringArrayVar(&a.searchDirs, "search-dir", nil, "Extra binary search locations (repeatable)")
 	f.StringArrayVar(&a.binPaths, "bin-path", nil, "Override an agent's binary path as id=path (repeatable)")
 
+	// A single named group keeps the real commands together in help, leaving
+	// cobra's help and completion under Additional Commands.
+	root.AddGroup(&cobra.Group{ID: groupCore, Title: "Core Commands:"})
 	root.AddCommand(
 		a.newListCmd(),
 		a.newGetCmd(),

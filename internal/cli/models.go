@@ -17,8 +17,9 @@ import (
 func (a *app) newModelsCmd() *cobra.Command {
 	var fields []string
 	cmd := &cobra.Command{
-		Use:   "models <agent> [query]",
-		Short: "List the models available to an agent",
+		Use:     "models <agent> [query]",
+		GroupID: groupCore,
+		Short:   "List the models available to an agent",
 		Long: "List the provider models available to an agent, with pricing, limits, and " +
 			"capabilities. With a query, fuzzy-match a single model; an ambiguous query lists candidates.",
 		Args: cobra.RangeArgs(1, 2),
@@ -77,6 +78,7 @@ func (a *app) modelsOne(cmd *cobra.Command, cat *agentdex.Catalog, id, query str
 			renderFields(w, fs)
 			return
 		}
+		fmt.Fprintln(w)
 		renderDetail(w, fs)
 		renderPriceFooter(w, modelFieldSet.all)
 	})
@@ -135,6 +137,7 @@ func (a *app) modelsList(cmd *cobra.Command, providers []string, client *modelsd
 		return a.usage(cmd, err)
 	}
 	return a.ok(cmd, data, warnings, func(w io.Writer) {
+		fmt.Fprintln(w)
 		renderTable(w, headers, rows, "No models available.")
 		if len(rows) > 0 {
 			renderPriceFooter(w, tableCols)

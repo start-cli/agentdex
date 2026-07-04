@@ -29,6 +29,7 @@ func (a *app) newGetCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:     "get <agent>",
 		Aliases: []string{"view", "show"},
+		GroupID: groupCore,
 		Short:   "Show detail for one agent",
 		Long: "Show detection detail for one agent: its binary, version, config and skills " +
 			"paths, provider-env presence, and the models its providers offer. Model enrichment " +
@@ -225,6 +226,7 @@ func (a *app) getFallthrough(cmd *cobra.Command, client *modelsdev.Client, cat *
 	_, headers, rows, _ := tabulate(recs, nil, modelFieldSet.defaults, modelFieldSet)
 	note := fmt.Errorf("%q is not a catalogued agent; showing models.dev provider %q (install details unavailable, not catalogued)", query, prov.ID)
 	return a.failData(cmd, codeNotFound, note, data, func(w io.Writer) {
+		fmt.Fprintln(w)
 		renderTable(w, headers, rows, "No models.")
 		if len(rows) > 0 {
 			renderPriceFooter(w, modelFieldSet.defaults)
@@ -282,6 +284,11 @@ func agentReportRecord(agent *agentdex.Agent) *record {
 // field flows into the inline detail straight from the record.
 var detailSections = map[string]bool{"provider_env": true, "models": true}
 
+// pathFields are the detail fields whose value is a filesystem path, styled with
+// tui.Path in the text view. Colour lives here, not in the record text, so table
+// cells and --fields output stay plain.
+var pathFields = map[string]bool{"bin": true, "config": true, "config_local": true, "skills": true}
+
 // renderAgentDetail writes the full text detail view. The inline scalar fields are
 // driven from the agent record in its declared order, so a field added or renamed
 // on the record reaches this view without a second list to maintain; provider_env
@@ -298,25 +305,39 @@ func renderAgentDetail(w io.Writer, agent *agentdex.Agent, verbose bool) {
 		if f.key == "found" && !verbose {
 			continue
 		}
+		if pathFields[f.key] && f.text != "-" && f.text != "missing" {
+			f.text = tui.Path.Sprint(f.text)
+		}
+		if f.key == "homepage" && f.text != "-" {
+			f.text = tui.URL.Sprint(f.text)
+		}
 		// The bin line always states presence, mirroring provider env's (set)/(unset):
 		// a found agent shows the path with "(found)", a not-installed one already
 		// reads "missing" from the record.
-		if f.key == "bin" && agent.Found {
-			f.text += " (found)"
+		if f.key == "bin" {
+			if agent.Found {
+				f.text += " " + styledState("found", true)
+			} else {
+				f.text = tui.Warn.Sprint(f.text)
+			}
 		}
 		if verbose {
 			if note := existenceNote(f.key, agent); note != "" {
-				f.text += " (" + note + ")"
+				f.text += " " + styledState(note, note == "exists")
 			}
 		}
 		detail = append(detail, f)
 	}
+	// A leading blank line sets the first heading off from the shell prompt,
+	// matching every heading-topped text surface.
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, tui.Header.Sprint("Agent"))
 	renderDetail(w, detail)
 
 	if agent.ProviderEnv != nil {
 		fmt.Fprintln(w)
 		fmt.Fprintln(w, tui.Header.Sprint("Provider env"))
-		fmt.Fprintln(w, "  "+formatProviderEnv(agent.ProviderEnv))
+		fmt.Fprintln(w, "  "+styledProviderEnv(agent.ProviderEnv))
 	}
 	if len(agent.Models) > 0 {
 		fmt.Fprintln(w)
@@ -365,6 +386,7 @@ func (a *app) getTree(cmd *cobra.Command, agent *agentdex.Agent, warnings []stri
 	}
 	data := map[string]any{"agent": agent.ID, "config": root, "entries": entries}
 	return a.ok(cmd, data, warnings, func(w io.Writer) {
+		fmt.Fprintln(w)
 		fmt.Fprintln(w, root)
 		if len(entries) == 0 {
 			fmt.Fprintln(w, tui.Muted.Sprint("  (empty or not present)"))

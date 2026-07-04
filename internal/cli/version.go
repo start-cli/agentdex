@@ -18,9 +18,10 @@ var (
 
 func (a *app) newVersionCmd() *cobra.Command {
 	return &cobra.Command{
-		Use:   "version",
-		Short: "Print the agentdex version, commit, and build date",
-		Args:  cobra.NoArgs,
+		Use:     "version",
+		GroupID: groupCore,
+		Short:   "Print the agentdex version, commit, and build date",
+		Args:    cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			data := map[string]any{"version": Version, "commit": Commit, "date": Date}
 			return a.ok(cmd, data, nil, func(w io.Writer) {
