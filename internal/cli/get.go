@@ -88,7 +88,25 @@ func (a *app) newGetCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&models, "models", false, "Force per-model enrichment on")
 	cmd.Flags().BoolVar(&noModels, "no-models", false, "Skip per-model enrichment (provider-env still shows)")
 	registerFieldsFlag(cmd, &fields)
+	addFieldsHelpSection(cmd, agentFieldSet)
 	return cmd
+}
+
+// addFieldsHelpSection injects a "Fields" section into the command's help so the
+// valid --fields keys render as their own section between Flags and Global Flags,
+// mirroring cobra's own section layout rather than being buried in the description.
+// The list is drawn from the field set --fields validates against, so the help can
+// never drift from what is accepted.
+func addFieldsHelpSection(cmd *cobra.Command, set fieldSet) {
+	// Split the keys across two indented rows so the section stays compact rather
+	// than running to one wide line.
+	half := (len(set.all) + 1) / 2
+	rows := "  " + strings.Join(set.all[:half], ", ") + "\n  " + strings.Join(set.all[half:], ", ")
+	section := "\n\nFields:\n" + rows
+	tmpl := strings.Replace(cmd.UsageTemplate(),
+		"{{if .HasAvailableInheritedFlags}}",
+		section+"{{if .HasAvailableInheritedFlags}}", 1)
+	cmd.SetUsageTemplate(tmpl)
 }
 
 // registerFieldsFlag adds the shared --fields flag and accepts the singular
