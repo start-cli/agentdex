@@ -54,7 +54,7 @@ func (a *app) newModelsCmd() *cobra.Command {
 			return a.modelsList(cmd, cat.Agents[id].Provider, client, fields, warnings)
 		},
 	}
-	cmd.Flags().StringSliceVar(&fields, "fields", nil, "Select output fields (csv)")
+	registerFieldsFlag(cmd, &fields)
 	return cmd
 }
 

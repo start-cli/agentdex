@@ -117,6 +117,24 @@ func TestUnknownFieldIsUsageError(t *testing.T) {
 	}
 }
 
+func TestFieldSingularAliasSelectsFields(t *testing.T) {
+	// The singular --field is a normalize-func alias for --fields, so a common
+	// slip resolves to the same selector instead of an unknown-flag usage error.
+	newScenario(t, "", "alpha-cli")
+
+	got := runCLI("--json", "list", "--field", "id,version")
+	if got.code != codeOK {
+		t.Fatalf("list --field exit = %d, stderr=%q", got.code, got.stderr)
+	}
+	row := got.envelope(t).Data.([]any)[0].(map[string]any)
+	if len(row) != 2 {
+		t.Errorf("--field should select exactly id,version: %v", row)
+	}
+	if _, ok := row["id"]; !ok {
+		t.Errorf("--field selection missing id: %v", row)
+	}
+}
+
 func TestInvalidColorFlagIsUsageError(t *testing.T) {
 	// An out-of-range --color value is settled in preRun before any command runs,
 	// so it is a usage fault (exit 2) regardless of the subcommand.

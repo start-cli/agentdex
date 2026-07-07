@@ -701,8 +701,7 @@ Behaviour:
   presentation; JSON model arrays follow the same order but carry raw numbers.
 - `get <agent>` enriches models and reports provider env presence by default.
   `--no-models` opts out of the per-model enrichment; provider-env still shows, since
-  it needs only the providers map. `--tree` prints the config directory tree (no
-  parsing of contents). When detection succeeds but models.dev is unreachable with no
+  it needs only the providers map. When detection succeeds but models.dev is unreachable with no
   cache, get degrades: it prints the detected agent, omits the Models and provider-env
   sections, emits a warning that model enrichment was unavailable, and exits 0.
   Enrichment is not the point of get, so its absence does not fail the command.

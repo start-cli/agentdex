@@ -243,50 +243,6 @@ func TestGetTextDetailDrivenByRecord(t *testing.T) {
 	}
 }
 
-func TestGetTreeListsConfigEntries(t *testing.T) {
-	// --tree walks the agent's resolved config dir without parsing contents and
-	// exits 0. alpha-cli's config global is ~/.alpha, which HOME points into.
-	srv := modelsServer(t, []string{"anthropic"})
-	s := newScenario(t, srv.URL, "alpha-cli")
-	cfgDir := filepath.Join(s.home, ".alpha")
-	mustMkdir(t, filepath.Join(cfgDir, "skills"))
-	writeFile(t, filepath.Join(cfgDir, "settings.json"), "{}")
-
-	got := runCLI("--json", "get", "alpha-cli", "--tree")
-	if got.code != codeOK {
-		t.Fatalf("get --tree exit = %d, stderr=%q", got.code, got.stderr)
-	}
-	data := got.envelope(t).Data.(map[string]any)
-	entries, ok := data["entries"].([]any)
-	if !ok {
-		t.Fatalf("tree entries missing: %v", data)
-	}
-	if !anyContainsAny(entries, "settings.json") || !anyContainsAny(entries, "skills") {
-		t.Errorf("tree should list config entries: %v", entries)
-	}
-}
-
-func TestGetTreeMissingConfigIsNotError(t *testing.T) {
-	// A not-yet-created config dir yields no entries and still exits 0.
-	srv := modelsServer(t, []string{"anthropic"})
-	newScenario(t, srv.URL, "alpha-cli")
-
-	got := runCLI("get", "alpha-cli", "--tree")
-	if got.code != codeOK {
-		t.Fatalf("get --tree (missing dir) exit = %d, want 0; stderr=%q", got.code, got.stderr)
-	}
-}
-
-// anyContainsAny reports whether any element (stringified) contains sub.
-func anyContainsAny(xs []any, sub string) bool {
-	for _, x := range xs {
-		if s, ok := x.(string); ok && strings.Contains(s, sub) {
-			return true
-		}
-	}
-	return false
-}
-
 func TestGetNoModelsKeepsProviderEnv(t *testing.T) {
 	srv := modelsServer(t, []string{"anthropic"})
 	newScenario(t, srv.URL, "alpha-cli")

@@ -5,12 +5,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
-	"os"
-	"path/filepath"
 	"strings"
 
 	"github.com/spf13/cobra"
+	"github.com/spf13/pflag"
 
 	"github.com/start-cli/agentdex"
 	"github.com/start-cli/agentdex/internal/config"
@@ -23,7 +21,6 @@ func (a *app) newGetCmd() *cobra.Command {
 	var (
 		noModels bool
 		models   bool
-		tree     bool
 		fields   []string
 	)
 	cmd := &cobra.Command{
@@ -71,9 +68,6 @@ func (a *app) newGetCmd() *cobra.Command {
 			if err != nil {
 				return a.fail(cmd, codeFor(err), err, warnings...)
 			}
-			if tree {
-				return a.getTree(cmd, agent, warnings)
-			}
 			if !found {
 				// Render the catalogued detail — resolved config paths, providers,
 				// homepage, bin reading "missing" — before the not-installed error,
@@ -93,9 +87,22 @@ func (a *app) newGetCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&models, "models", false, "Force per-model enrichment on")
 	cmd.Flags().BoolVar(&noModels, "no-models", false, "Skip per-model enrichment (provider-env still shows)")
-	cmd.Flags().BoolVar(&tree, "tree", false, "Print the config directory tree instead of detail")
-	cmd.Flags().StringSliceVar(&fields, "fields", nil, "Select output fields (csv)")
+	registerFieldsFlag(cmd, &fields)
 	return cmd
+}
+
+// registerFieldsFlag adds the shared --fields flag and accepts the singular
+// --field as an alias, so a common slip resolves to the same flag instead of
+// failing with an unknown-flag usage error. The alias is invisible in help;
+// --fields stays the one documented name.
+func registerFieldsFlag(cmd *cobra.Command, fields *[]string) {
+	cmd.Flags().StringSliceVar(fields, "fields", nil, "Select output fields (csv)")
+	cmd.Flags().SetNormalizeFunc(func(_ *pflag.FlagSet, name string) pflag.NormalizedName {
+		if name == "field" {
+			name = "fields"
+		}
+		return pflag.NormalizedName(name)
+	})
 }
 
 // coverage is the per-provider models.dev rollup verdict for a detected agent.
@@ -375,60 +382,6 @@ func existenceNote(key string, agent *agentdex.Agent) string {
 		return "exists"
 	}
 	return "missing"
-}
-
-// getTree prints the agent's config directory tree without parsing contents.
-func (a *app) getTree(cmd *cobra.Command, agent *agentdex.Agent, warnings []string) error {
-	root := agent.Config.Global
-	entries, err := walkTree(root)
-	if err != nil {
-		return a.fail(cmd, codeFailure, fmt.Errorf("walk config tree: %w", err), warnings...)
-	}
-	data := map[string]any{"agent": agent.ID, "config": root, "entries": entries}
-	return a.ok(cmd, data, warnings, func(w io.Writer) {
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, root)
-		if len(entries) == 0 {
-			fmt.Fprintln(w, tui.Muted.Sprint("  (empty or not present)"))
-			return
-		}
-		for _, e := range entries {
-			fmt.Fprintf(w, "  %s\n", e)
-		}
-	})
-}
-
-// walkTree returns the relative paths under root in walk order. A missing root is
-// not an error: it yields no entries, matching a not-yet-created config dir.
-func walkTree(root string) ([]string, error) {
-	if root == "" {
-		return nil, nil
-	}
-	var entries []string
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			if errors.Is(err, fs.ErrNotExist) {
-				return filepath.SkipAll
-			}
-			return err
-		}
-		if path == root {
-			return nil
-		}
-		rel, rerr := filepath.Rel(root, path)
-		if rerr != nil {
-			return rerr
-		}
-		if d.IsDir() {
-			rel += string(os.PathSeparator)
-		}
-		entries = append(entries, rel)
-		return nil
-	})
-	if err != nil {
-		return nil, err
-	}
-	return entries, nil
 }
 
 // jsonRecords resolves records to their full present-field JSON maps, for nesting

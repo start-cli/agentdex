@@ -102,6 +102,6 @@ func (a *app) newListCmd() *cobra.Command {
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "Include catalogued agents that were not detected")
 	cmd.Flags().BoolVar(&models, "models", false, "Enrich each agent with its models.dev models")
-	cmd.Flags().StringSliceVar(&fields, "fields", nil, "Select output fields (csv)")
+	registerFieldsFlag(cmd, &fields)
 	return cmd
 }
