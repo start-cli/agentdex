@@ -54,7 +54,13 @@ Field names appear beyond the two field-set declarations. `pathFields`, `detailS
 
 1. Produce a decision for every field in both field sets: keep the current name, or rename it, with a one-line rationale per field. The rationale judges each name against one rule: the name states what the value is. A field whose value is a filesystem path reads as a location, not as the content a reader might infer from a bare noun.
 2. For every field that is renamed, migrate all four coupled surfaces to the new name: JSON `.data` key, `--fields` token, text detail label, and table header. Keep the field's value, presence rules, and ordering unchanged.
-3. Update the string-keyed maps and slices that reference field names (`pathFields`, `detailSections`, `agentVerboseFields`, and any similar literal references) to the decided names, so no stale key silently drops a field from path styling, section handling, or verbose columns.
+3. Update every site that references a field name by literal string to the decided names, so no stale key silently drops a field from path styling, section handling, verbose columns, existence annotation, presence markers, or the price footer. These references are not confined to the field-set declarations; the known sites in `internal/cli` are:
+   - `pathFields`, `detailSections`, `agentVerboseFields` — the maps and slice that gate path styling, section rendering, and verbose columns.
+   - `existenceNote` (`get.go`) — the `switch` on key that drives the `--verbose` `(exists)/(missing)` annotation; a renamed key falls through to the `default` and the annotation silently vanishes.
+   - The `renderAgentDetail` inline `f.key ==` special-cases for `bin`, `homepage`, and `found` (`get.go`) — the `bin` `(found)` presence marker, homepage URL styling, and the verbose-only `found` line.
+   - `renderPriceFooter` (`render.go`) — the `input`/`output` check that emits the price-unit footer; a renamed key silently drops the footer.
+
+   None of these fail the build or vet when stale, so the repository-wide search in the Implementation Plan must reach each one. Treat this list as the known sites, not an exhaustive one: search for every old name to catch any similar literal reference.
 4. Update the design doc and README to the decided names wherever a field name or `--fields` example appears.
 5. Update tests to assert on the decided names. Tests must continue to prove the same behaviour under the new names, not merely be deleted.
 6. Decide whether the machine name (JSON key and `--fields` token) and the human display label should remain coupled or be split. If a field reads best with a terse machine name and a fuller label, or the reverse, record the decision. If the coupling is kept, the display label equals the machine name and no split mechanism is added. If a split is chosen, introduce the minimum mechanism to carry a separate label and apply it only where it earns its place.
