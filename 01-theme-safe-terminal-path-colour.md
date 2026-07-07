@@ -25,7 +25,7 @@ Out of scope:
 
 agentdex renders human-facing text through `internal/tui/color.go`, a set of `fatih/color` styles gated by a process-wide `NoColor` toggle. `Configure` sets that toggle from the `--color` mode, `NO_COLOR`, and TTY detection, so `--color never` and non-TTY output already emit plain text.
 
-The detail view for `agentdex get <agent>` (`internal/cli/get.go`, `renderAgentDetail`) prints aligned `label  value` lines. Labels use `tui.Label` (`FgCyan`). Most scalar values (`id`, `name`, `version`, `providers`) use the terminal default foreground. Four path fields — `bin`, `config`, `config_local`, `skills` — are singled out and wrapped in `tui.Path` via the `pathFields` map.
+The detail view for `agentdex get <agent>` (`internal/cli/get.go`, `renderAgentDetail`) prints aligned `label  value` lines. Labels use `tui.Label` (`FgCyan`). Most scalar values (`id`, `name`, `version`, `providers`) use the terminal default foreground. Four path fields — `bin`, `config_dir`, `config_local_dir`, `skills_dir` — are singled out and wrapped in `tui.Path` via the `pathFields` map.
 
 `tui.Path` is currently `color.New(color.FgHiWhite)`. Its doc comment records that `HiWhite` was chosen over the start standard's `HiCyan` specifically to avoid two adjacent cyans (cyan label beside a cyan path reading as one run).
 
@@ -58,6 +58,6 @@ The same path-colour question applies to every start-cli tool that adopts the sh
 ## Acceptance Criteria
 
 - Path lines in `agentdex get <agent>` are readable against a white terminal background and a black terminal background.
-- The `bin`, `config`, `config_local`, and `skills` path fields share one consistent treatment.
-- `agentdex --json get <agent>` and `agentdex get <agent> --fields bin,config` emit paths with no ANSI codes.
+- The `bin`, `config_dir`, `config_local_dir`, and `skills_dir` path fields share one consistent treatment.
+- `agentdex --json get <agent>` and `agentdex get <agent> --fields bin,config_dir` emit paths with no ANSI codes.
 - The shared start terminal colour standard's path guidance is theme-safe, or agentdex's deviation from it is documented at the style.

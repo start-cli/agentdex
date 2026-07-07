@@ -233,7 +233,7 @@ func TestGetTextDetailDrivenByRecord(t *testing.T) {
 	if got.code != codeOK {
 		t.Fatalf("get exit = %d, stderr=%q", got.code, got.stderr)
 	}
-	for _, key := range []string{"id", "name", "version", "bin", "config", "providers", "homepage"} {
+	for _, key := range []string{"id", "name", "version", "bin", "config_dir", "providers", "homepage"} {
 		if !strings.Contains(got.stdout, key) {
 			t.Errorf("text detail missing field %q:\n%s", key, got.stdout)
 		}

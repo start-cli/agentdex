@@ -294,7 +294,7 @@ var detailSections = map[string]bool{"provider_env": true, "models": true}
 // pathFields are the detail fields whose value is a filesystem path, styled with
 // tui.Path in the text view. Colour lives here, not in the record text, so table
 // cells and --fields output stay plain.
-var pathFields = map[string]bool{"bin": true, "config": true, "config_local": true, "skills": true}
+var pathFields = map[string]bool{"bin": true, "config_dir": true, "config_local_dir": true, "skills_dir": true}
 
 // renderAgentDetail writes the full text detail view. The inline scalar fields are
 // driven from the agent record in its declared order, so a field added or renamed
@@ -366,11 +366,11 @@ func existenceNote(key string, agent *agentdex.Agent) string {
 	var path string
 	var exists bool
 	switch key {
-	case "config":
+	case "config_dir":
 		path, exists = agent.Config.Global, agent.Config.GlobalExists
-	case "config_local":
+	case "config_local_dir":
 		path, exists = agent.Config.Local, agent.Config.LocalExists
-	case "skills":
+	case "skills_dir":
 		path, exists = agent.Skills.Global, agent.Skills.GlobalExists
 	default:
 		return ""

@@ -16,7 +16,7 @@ import (
 // It governs --fields validation and the get text-detail ordering, so both
 // surfaces stay in step when a field is added or renamed.
 var agentFieldSet = newFieldSet(
-	[]string{"id", "name", "version", "bin", "found", "config", "config_local", "skills", "providers", "homepage", "provider_env", "models"},
+	[]string{"id", "name", "version", "bin", "found", "config_dir", "config_local_dir", "skills_dir", "providers", "homepage", "provider_env", "models"},
 	[]string{"id", "name", "version", "providers", "bin"},
 )
 
@@ -24,7 +24,7 @@ var agentFieldSet = newFieldSet(
 // columns widened with the global config dir. bin stays last in both sets: it is
 // the widest, most variable column, and under list --all its "missing" cell is
 // the detection signal.
-var agentVerboseFields = []string{"id", "name", "version", "config", "providers", "bin"}
+var agentVerboseFields = []string{"id", "name", "version", "config_dir", "providers", "bin"}
 
 // agentRecord builds the field values for one detected agent. Optional fields that
 // are absent (no local config, no skills concept, no enrichment) are simply not
@@ -42,14 +42,14 @@ func agentRecord(a *agentdex.Agent) *record {
 	}
 	r.add("bin", a.BinaryPath, binText)
 	r.add("found", a.Found, fmt.Sprintf("%t", a.Found))
-	r.add("config", a.Config.Global, orDash(a.Config.Global))
-	// config_local and skills are added here, in their declared position, so the add
+	r.add("config_dir", a.Config.Global, orDash(a.Config.Global))
+	// config_local_dir and skills_dir are added here, in their declared position, so the add
 	// order matches agentFieldSet.all and the text detail view renders in that order.
 	if a.Config.Local != "" {
-		r.add("config_local", a.Config.Local, a.Config.Local)
+		r.add("config_local_dir", a.Config.Local, a.Config.Local)
 	}
 	if a.Skills.Global != "" {
-		r.add("skills", a.Skills.Global, a.Skills.Global)
+		r.add("skills_dir", a.Skills.Global, a.Skills.Global)
 	}
 	r.add("providers", a.Providers, strings.Join(a.Providers, ", "))
 	r.add("homepage", a.Homepage, orDash(a.Homepage))

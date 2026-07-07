@@ -78,8 +78,8 @@ func TestListValidButAbsentFieldResolvesBlank(t *testing.T) {
 }
 
 func TestListVerboseAddsColumns(t *testing.T) {
-	// --verbose widens the default columns with config; plain list shows bin (a
-	// default column) but not config. --json is unaffected (it always carries the
+	// --verbose widens the default columns with config_dir; plain list shows bin (a
+	// default column) but not config_dir. --json is unaffected (it always carries the
 	// full record).
 	newScenario(t, "", "alpha-cli")
 
@@ -90,15 +90,15 @@ func TestListVerboseAddsColumns(t *testing.T) {
 	if !strings.Contains(plain.stdout, "BIN") {
 		t.Errorf("plain list should show the bin column:\n%s", plain.stdout)
 	}
-	if strings.Contains(plain.stdout, "CONFIG") {
-		t.Errorf("plain list should not show the config column:\n%s", plain.stdout)
+	if strings.Contains(plain.stdout, "CONFIG_DIR") {
+		t.Errorf("plain list should not show the config_dir column:\n%s", plain.stdout)
 	}
 
 	verbose := runCLI("list", "--verbose")
 	if verbose.code != codeOK {
 		t.Fatalf("list --verbose exit = %d, stderr=%q", verbose.code, verbose.stderr)
 	}
-	for _, col := range []string{"BIN", "CONFIG"} {
+	for _, col := range []string{"BIN", "CONFIG_DIR"} {
 		if !strings.Contains(verbose.stdout, col) {
 			t.Errorf("list --verbose missing %q column:\n%s", col, verbose.stdout)
 		}
@@ -203,7 +203,7 @@ func TestListDefaultDoesNotEnrich(t *testing.T) {
 func TestListJSONCarriesFullRecord(t *testing.T) {
 	// --json is a data format, not a view: without --fields it carries the full
 	// record per row, not just the default table columns, so machine consumers are
-	// never silently truncated. bin, config, and homepage are non-default fields.
+	// never silently truncated. bin, config_dir, and homepage are non-default fields.
 	newScenario(t, "", "alpha-cli")
 
 	got := runCLI("--json", "list")
@@ -211,7 +211,7 @@ func TestListJSONCarriesFullRecord(t *testing.T) {
 		t.Fatalf("list exit = %d, stderr=%q", got.code, got.stderr)
 	}
 	row := got.envelope(t).Data.([]any)[0].(map[string]any)
-	for _, key := range []string{"bin", "config", "homepage"} {
+	for _, key := range []string{"bin", "config_dir", "homepage"} {
 		if _, ok := row[key]; !ok {
 			t.Errorf("list --json should carry non-default field %q: %v", key, row)
 		}
