@@ -30,6 +30,102 @@ Caching is version-resolution caching layered over CUE's own module content cach
 - On a failed re-resolution after the TTL expires, agentdex keeps using the last resolved version (the resolution is reported as stale so a caller can warn while still working).
 - A first run with no network and no previously resolved version fails clearly with `ErrCatalogUnavailable`. This is accepted behaviour, not a defect.
 
+## Adding an agent to the catalog
+
+An agent is a catalog edit, not a code change. Each entry is one map key in
+`catalog/agents.cue`; the key is the kebab-case id (`^[a-z0-9]+(-[a-z0-9]+)*$`)
+and the single source of identity, so there is no `id` field inside the entry.
+Report only the outside of the agent (identity, location, paths, version,
+capability); never add a field that requires reading the agent's internal
+configuration.
+
+### 1. Research the outside facts
+
+Gather the static facts the catalog stores and confirm each against the real
+agent, not from memory:
+
+- `bin`: the executable name resolved on PATH (`exec.LookPath`), no `.exe`.
+- `config` / `skills` paths: global and optional local directories, written with
+  `~` and XDG-style paths, not an absolute home.
+- `version.args` and optional `version.pattern`: the flag that prints the version
+  and a regex to extract it.
+- `provider`: one or more real models.dev provider ids. This is the join key to
+  models.dev enrichment; a wrong id silently drops model data.
+
+### 2. Add the entry
+
+Add a block alongside the existing agents in `catalog/agents.cue`:
+
+```cue
+agents: "opencode": {
+	name:        "OpenCode"
+	bin:         "opencode"
+	description: "..."
+	config: {
+		global: "~/.config/opencode"
+		local:  ".opencode"
+	}
+	skills: {
+		global: "~/.config/opencode/skills"
+		local:  ".opencode/skills"
+	}
+	version: {
+		args:    ["--version"]
+		pattern: "([0-9]+\\.[0-9]+\\.[0-9]+)"
+	}
+	provider: ["anthropic", "openai"]
+	homepage: "https://..."
+}
+```
+
+Fields, per `catalog/schema.cue`:
+
+| Field | Required | Notes |
+|---|---|---|
+| `name` | yes | Human display name, non-empty |
+| `bin` | yes | Executable resolved on PATH, non-empty |
+| `config.global` | yes | Global config directory |
+| `provider` | yes | One or more models.dev provider ids; the join key |
+| `description` | no | One sentence |
+| `config.local` | no | Project-local config directory |
+| `skills.global` | with `skills` | Required when `skills` is present |
+| `skills.local` | no | Project-local skills directory |
+| `version.args` | no | Appended to the binary, e.g. `["--version"]` |
+| `version.pattern` | no | Regex to extract the version string |
+| `homepage` | no | Project URL |
+
+### 3. Validate locally
+
+From `catalog/`:
+
+```bash
+cue vet ./...
+cue mod tidy
+```
+
+`cue vet` validates by evaluation because `schema.cue` travels with the data; a
+missing required field or an empty path fails here. `cue mod tidy` must leave the
+module clean.
+
+### 4. Exercise through the library
+
+Point the loader at the local module with the `catalog.module` override rather
+than the registry, then confirm detection before publishing:
+
+```bash
+agentdex list
+agentdex get <id>
+```
+
+### 5. Publish a new catalog version
+
+The catalog is versioned and published independently of the Go binary, so adding
+an agent needs no agentdex release. Publish a new version under the `@v1` major
+line to the CUE Central Registry with the same mechanism start/library uses;
+`cue login` and `CUE_REGISTRY` are honoured as-is, with no agentdex-specific auth.
+Existing installs resolve the new version within the cache TTL (24h default); new
+installs resolve it immediately via `ModuleVersions`.
+
 ## Style
 
 Go:
