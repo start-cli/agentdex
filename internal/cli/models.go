@@ -55,6 +55,7 @@ func (a *app) newModelsCmd() *cobra.Command {
 		},
 	}
 	registerFieldsFlag(cmd, &fields)
+	addFieldsHelpSection(cmd, modelFieldSet)
 	return cmd
 }
 

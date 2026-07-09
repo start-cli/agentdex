@@ -609,8 +609,9 @@ it requires a models.dev client (attached via `WithModels`) and is left nil when
 is attached or models.dev is unreachable, never failing `Detect`. It needs only the
 small providers map, so `get` attaches the client unconditionally and adds
 `EnrichModels()` unless `--no-models`, keeping provider-env on even under
-`--no-models`; `list` attaches no client by default, adding one only under `--models`,
-to stay offline-fast.
+`--no-models`; `list` also attaches the client and enriches unconditionally, served
+from the warm models.dev cache with no network and degrading to a zero count (with a
+warning) when models.dev is unreachable.
 
 ## Catalog and models.dev coverage
 
@@ -689,12 +690,20 @@ known agent (see Output and exit codes).
 
 Behaviour:
 
-- `list` does not enrich models by default (fast, offline once cached). `--models`
-  opts in. `--all` additionally lists catalogued agents whose binary was not
-  found: detected agents first, then the missing tail by id, with `missing` in
-  the BIN column and `-` in VERSION (the library's IncludeMissing option; in
-  JSON these rows carry `found: false` with a blank bin). The BIN column is part
-  of the default list columns, last because it is the widest.
+- `list` enriches every agent with its models.dev model count, shown in the MODELS
+  column between PROVIDERS and BIN. Enrichment is served from the warm cache with
+  no network and degrades to a zero count when models.dev is unreachable, so the
+  listing never fails on it; an unreachable-and-uncached models.dev is warned so the
+  zero reads as unavailable rather than a genuine empty catalog. Malformed models.dev data (`ErrModelsSchema`) is the
+  one fault that would otherwise be fatal, but because enrichment is auxiliary to
+  the listing, `list` re-detects without it and warns rather than exiting: the
+  drift stays loud (a warning, not a silent blank) without killing the command.
+  This is the deliberate exception to the schema-drift-is-fatal rule that `get` and
+  `models` follow, where models are central. `--all` additionally lists catalogued agents whose
+  binary was not found: detected agents first, then the missing tail by id, with
+  `missing` in the BIN column and `-` in VERSION (the library's IncludeMissing
+  option; in JSON these rows carry `found: false` with a blank bin). The BIN column
+  is part of the default list columns, last because it is the widest.
 - Model listings (get's Models section and `models`) render newest release first
   (descending release_date, ties by id) and carry a muted footer naming the
   pricing unit: `Prices in USD per 1M tokens (models.dev)`. Both are text-surface
@@ -782,8 +791,9 @@ TTL resolution per cache: the section ttl, then cache_ttl, then the built-in 24h
 
 `enrich_models` sets the default for `get`'s per-model enrichment only. It exists so
 a slow or frequently-offline machine can make `get` default to no enrichment without
-typing `--no-models` each time. It does not affect `list`, which stays offline-fast
-and opts in per call via `--models`, nor `models`, whose enrichment is inherent.
+typing `--no-models` each time. It does not affect `list`, whose model-count
+enrichment is unconditional (degrading to zero when models.dev is unreachable), nor
+`models`, whose enrichment is inherent.
 Precedence for `get`: an explicit `--models`/`--no-models` flag wins over
 `enrich_models`, which wins over the built-in default. Provider-env reporting is
 unaffected and still shows whenever a client is attached, since it needs only the

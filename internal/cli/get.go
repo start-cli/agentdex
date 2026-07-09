@@ -92,9 +92,19 @@ func (a *app) newGetCmd() *cobra.Command {
 	return cmd
 }
 
-// addFieldsHelpSection injects a "Fields" section into the command's help so the
-// valid --fields keys render as their own section between Flags and Global Flags,
-// mirroring cobra's own section layout rather than being buried in the description.
+// addHelpSection injects a titled, pre-formatted section into the command's help,
+// rendered between Flags and Global Flags so it mirrors cobra's own section layout
+// rather than being buried in the description. body is emitted verbatim, so the
+// caller owns its indentation and line breaks.
+func addHelpSection(cmd *cobra.Command, title, body string) {
+	section := "\n\n" + title + ":\n" + body
+	tmpl := strings.Replace(cmd.UsageTemplate(),
+		"{{if .HasAvailableInheritedFlags}}",
+		section+"{{if .HasAvailableInheritedFlags}}", 1)
+	cmd.SetUsageTemplate(tmpl)
+}
+
+// addFieldsHelpSection injects a "Fields" section listing the valid --fields keys.
 // The list is drawn from the field set --fields validates against, so the help can
 // never drift from what is accepted.
 func addFieldsHelpSection(cmd *cobra.Command, set fieldSet) {
@@ -102,11 +112,7 @@ func addFieldsHelpSection(cmd *cobra.Command, set fieldSet) {
 	// than running to one wide line.
 	half := (len(set.all) + 1) / 2
 	rows := "  " + strings.Join(set.all[:half], ", ") + "\n  " + strings.Join(set.all[half:], ", ")
-	section := "\n\nFields:\n" + rows
-	tmpl := strings.Replace(cmd.UsageTemplate(),
-		"{{if .HasAvailableInheritedFlags}}",
-		section+"{{if .HasAvailableInheritedFlags}}", 1)
-	cmd.SetUsageTemplate(tmpl)
+	addHelpSection(cmd, "Fields", rows)
 }
 
 // registerFieldsFlag adds the shared --fields flag and accepts the singular

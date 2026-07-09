@@ -165,38 +165,80 @@ func TestListAllIncludesMissingAgents(t *testing.T) {
 	}
 }
 
-func TestListModelsAddsCountColumn(t *testing.T) {
-	// --models surfaces a model column in the default text table; plain list does
-	// not. The fixture's anthropic provider offers one model.
+func TestListShowsModelsColumn(t *testing.T) {
+	// list always enriches each agent with its models.dev model count, surfacing a
+	// MODELS column between PROVIDERS and BIN. The fixture's anthropic provider
+	// offers one model, so alpha-cli's enriched list carries it.
 	srv := modelsServer(t, []string{"anthropic"})
 	newScenario(t, srv.URL, "alpha-cli")
 
-	plain := runCLI("list")
-	if strings.Contains(plain.stdout, "MODELS") {
-		t.Errorf("plain list should not show a models column:\n%s", plain.stdout)
-	}
-
-	got := runCLI("list", "--models")
+	got := runCLI("list")
 	if got.code != codeOK {
-		t.Fatalf("list --models exit = %d, stderr=%q", got.code, got.stderr)
+		t.Fatalf("list exit = %d, stderr=%q", got.code, got.stderr)
 	}
 	if !strings.Contains(got.stdout, "MODELS") {
-		t.Errorf("list --models missing the models column:\n%s", got.stdout)
+		t.Errorf("list missing the models column:\n%s", got.stdout)
+	}
+	// MODELS sits between PROVIDERS and BIN in the default columns.
+	pi, mi, bi := strings.Index(got.stdout, "PROVIDERS"), strings.Index(got.stdout, "MODELS"), strings.Index(got.stdout, "BIN")
+	if pi < 0 || pi >= mi || mi >= bi {
+		t.Errorf("columns out of order, want PROVIDERS < MODELS < BIN:\n%s", got.stdout)
+	}
+
+	j := runCLI("--json", "list")
+	row := j.envelope(t).Data.([]any)[0].(map[string]any)
+	models, ok := row["models"].([]any)
+	if !ok || len(models) != 1 {
+		t.Errorf("list --json should carry one enriched model for alpha-cli: %v", row["models"])
 	}
 }
 
-func TestListDefaultDoesNotEnrich(t *testing.T) {
-	// A closed models server proves default list never reaches the network: it
-	// must succeed without ever consulting models.dev.
+func TestListDegradesWhenModelsUnreachable(t *testing.T) {
+	// list always attempts enrichment, but a models.dev outage with no cache must
+	// degrade to a zero model count rather than failing the listing, and warn so the
+	// zero reads as "unavailable" rather than a genuine empty catalog.
 	newScenario(t, closedModelsServer(t), "alpha-cli")
+
+	got := runCLI("list")
+	if got.code != codeOK {
+		t.Fatalf("list with unreachable models.dev exit = %d, want 0; stderr=%q", got.code, got.stderr)
+	}
+	if !strings.Contains(got.stdout, "MODELS") {
+		t.Errorf("degraded list should still show the models column:\n%s", got.stdout)
+	}
+
+	// The degraded JSON carries [] (not null) so it matches the "0" count cell and
+	// stays scripting-safe, and a warning explains the zero.
+	j := runCLI("--json", "list")
+	env := j.envelope(t)
+	if !anyContains(env.Warnings, "unreachable") {
+		t.Errorf("degraded list should warn that model counts are unavailable: %v", env.Warnings)
+	}
+	row := env.Data.([]any)[0].(map[string]any)
+	models, ok := row["models"].([]any)
+	if !ok || len(models) != 0 {
+		t.Errorf("degraded list --json should carry an empty models array, got %#v", row["models"])
+	}
+}
+
+func TestListDegradesOnModelsSchemaDrift(t *testing.T) {
+	// Malformed models.dev data must not kill the listing: detection is sound, so
+	// list degrades the models column and warns rather than failing the whole
+	// command (unlike get/models, where models are central and drift is fatal).
+	srv := modelsServer(t, nil, "anthropic") // anthropic ships a malformed model
+	newScenario(t, srv.URL, "alpha-cli")
 
 	got := runCLI("--json", "list")
 	if got.code != codeOK {
-		t.Fatalf("default list exit = %d, stderr=%q", got.code, got.stderr)
+		t.Fatalf("list on models schema drift exit = %d, want 0; stderr=%q", got.code, got.stderr)
 	}
-	row := got.envelope(t).Data.([]any)[0].(map[string]any)
-	if _, present := row["models"]; present {
-		t.Errorf("default list enriched models without --models: %v", row)
+	env := got.envelope(t)
+	rows, ok := env.Data.([]any)
+	if !ok || len(rows) != 1 || rows[0].(map[string]any)["id"] != "alpha-cli" {
+		t.Fatalf("list should still report the detected agent: %v", env.Data)
+	}
+	if !anyContains(env.Warnings, "model counts omitted") {
+		t.Errorf("list should warn that model counts were omitted: %v", env.Warnings)
 	}
 }
 

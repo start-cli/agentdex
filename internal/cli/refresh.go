@@ -4,6 +4,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -11,8 +12,45 @@ import (
 	"github.com/start-cli/agentdex/modelsdev"
 )
 
-// refreshTargets are the caches refresh can force. all refreshes both.
-var refreshTargets = map[string]bool{"catalog": true, "models": true, "all": true}
+// refreshTargets are the caches refresh can force, in help-display order, each with
+// its one-line description. all refreshes both. This slice is the single source for
+// target validation, the unknown-target error, and the Targets help section, so the
+// three cannot drift.
+var refreshTargets = []struct{ name, desc string }{
+	{"catalog", "Re-resolve the agent catalog version"},
+	{"models", "Refetch the models.dev catalog"},
+	{"all", "Both (default)"},
+}
+
+// validRefreshTarget reports whether name is an accepted refresh target.
+func validRefreshTarget(name string) bool {
+	for _, t := range refreshTargets {
+		if t.name == name {
+			return true
+		}
+	}
+	return false
+}
+
+// refreshTargetList renders the accepted targets as an Oxford-style list ("a, b,
+// or c") for the unknown-target error, so the message reads naturally and stays in
+// step with the command's Short help while still deriving from refreshTargets.
+func refreshTargetList() string {
+	names := make([]string, len(refreshTargets))
+	for i, t := range refreshTargets {
+		names[i] = t.name
+	}
+	switch len(names) {
+	case 0:
+		return ""
+	case 1:
+		return names[0]
+	case 2:
+		return names[0] + " or " + names[1]
+	default:
+		return strings.Join(names[:len(names)-1], ", ") + ", or " + names[len(names)-1]
+	}
+}
 
 func (a *app) newRefreshCmd() *cobra.Command {
 	cmd := &cobra.Command{
@@ -31,8 +69,8 @@ func (a *app) newRefreshCmd() *cobra.Command {
 			if len(args) == 1 {
 				target = args[0]
 			}
-			if !refreshTargets[target] {
-				return a.usage(cmd, fmt.Errorf("unknown refresh target %q: want catalog, models, or all", target))
+			if !validRefreshTarget(target) {
+				return a.usage(cmd, fmt.Errorf("unknown refresh target %q: want %s", target, refreshTargetList()))
 			}
 
 			var refreshed []string
@@ -70,10 +108,24 @@ func (a *app) newRefreshCmd() *cobra.Command {
 			data := map[string]any{"refreshed": refreshed}
 			return a.ok(cmd, data, nil, func(w io.Writer) {
 				for _, r := range refreshed {
-					fmt.Fprintf(w, "refreshed %s cache\n", r)
+					fmt.Fprintf(w, "Refreshed %s cache\n", r)
 				}
 			})
 		},
 	}
+	// Mirror get/models' Fields section: list the accepted [target] values as their
+	// own help section, derived from refreshTargets so it cannot drift from what the
+	// command accepts.
+	width := 0
+	for _, t := range refreshTargets {
+		if len(t.name) > width {
+			width = len(t.name)
+		}
+	}
+	var body strings.Builder
+	for _, t := range refreshTargets {
+		fmt.Fprintf(&body, "  %-*s  %s\n", width, t.name, t.desc)
+	}
+	addHelpSection(cmd, "Targets", strings.TrimRight(body.String(), "\n"))
 	return cmd
 }

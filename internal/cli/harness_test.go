@@ -73,11 +73,17 @@ type scenario struct {
 
 // newScenario stands up an isolated agentdex world: temp HOME and XDG dirs, the
 // fixture catalog published to an in-process OCI registry, fake agent binaries on
-// a search dir, and a config.cue pointing model enrichment at modelsURL (empty to
-// omit it). bins lists which fixture agent binaries to install, so a test can make
-// an agent "not installed" by leaving its binary out.
+// a search dir, and a config.cue pointing model enrichment at modelsURL. An empty
+// modelsURL wires a local models server carrying every fixture provider so
+// enrichment (now always attempted by list) stays deterministic and network-free,
+// without ever reaching the real models.dev. bins lists which fixture agent
+// binaries to install, so a test can make an agent "not installed" by leaving its
+// binary out.
 func newScenario(t *testing.T, modelsURL string, bins ...string) *scenario {
 	t.Helper()
+	if modelsURL == "" {
+		modelsURL = modelsServer(t, []string{"anthropic", "openai", "google"}).URL
+	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, ".config"))

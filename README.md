@@ -26,7 +26,7 @@ agentdex version
 agentdex completion              shell completion script
 ```
 
-`list` is offline-fast once cached and does not enrich models; pass `--models` to opt in. `get` enriches models and reports provider-env presence by default; `--no-models` skips per-model enrichment while keeping provider-env. Global flags include `--json` (a `status`/`data`/`error`/`warnings` envelope), `--color auto|always|never`, `--search-dir`, and `--bin-path id=path`. The `--fields` flag (field selection) is per-command, available on `list`, `get`, and `models`.
+`list` shows each agent's models.dev model count, served from the warm cache and degrading to zero (with a warning) when models.dev is unreachable. `get` enriches models and reports provider-env presence by default; `--no-models` skips per-model enrichment while keeping provider-env. Global flags include `--json` (a `status`/`data`/`error`/`warnings` envelope), `--color auto|always|never`, `--search-dir`, and `--bin-path id=path`. The `--fields` flag (field selection) is per-command, available on `list`, `get`, and `models`.
 
 Configuration is optional and lives at `$XDG_CONFIG_HOME/agentdex/config.cue`. See `docs/agentdex-design.md` for the full schema.
 

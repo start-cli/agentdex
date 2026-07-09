@@ -17,14 +17,14 @@ import (
 // surfaces stay in step when a field is added or renamed.
 var agentFieldSet = newFieldSet(
 	[]string{"id", "name", "version", "bin", "found", "config_dir", "config_local_dir", "skills_dir", "providers", "homepage", "provider_env", "models"},
-	[]string{"id", "name", "version", "providers", "bin"},
+	[]string{"id", "name", "version", "providers", "models", "bin"},
 )
 
 // agentVerboseFields are the list table columns under --verbose: the default
-// columns widened with the global config dir. bin stays last in both sets: it is
-// the widest, most variable column, and under list --all its "missing" cell is
-// the detection signal.
-var agentVerboseFields = []string{"id", "name", "version", "config_dir", "providers", "bin"}
+// columns widened with the global config dir. models sits between providers and
+// bin in both sets; bin stays last, the widest, most variable column, whose
+// "missing" cell is the list --all detection signal.
+var agentVerboseFields = []string{"id", "name", "version", "config_dir", "providers", "models", "bin"}
 
 // agentRecord builds the field values for one detected agent. Optional fields that
 // are absent (no local config, no skills concept, no enrichment) are simply not
@@ -67,8 +67,13 @@ func withProviderEnv(r *record, env map[string]bool) {
 
 // withModels adds the enriched models field: the typed list for JSON and a count
 // for the table cell. The detailed model listing in get's text view is rendered
-// separately from this summary.
+// separately from this summary. A nil list (list's degraded-enrichment case) is
+// normalised to an empty slice so the JSON carries [] to match the "0" count cell,
+// rather than a null that disagrees with the text and breaks `jq '.models|length'`.
 func withModels(r *record, models []modelsdev.Model) {
+	if models == nil {
+		models = []modelsdev.Model{}
+	}
 	r.add("models", models, fmt.Sprintf("%d", len(models)))
 }
 

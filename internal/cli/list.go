@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -8,20 +9,20 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/start-cli/agentdex"
+	"github.com/start-cli/agentdex/modelsdev"
 )
 
 func (a *app) newListCmd() *cobra.Command {
-	var models bool
 	var all bool
 	var fields []string
 	cmd := &cobra.Command{
 		Use:     "list",
 		GroupID: groupCore,
 		Short:   "List detected agents",
-		Long: "List the AI coding agents detected on this machine. --all adds the catalogued " +
-			"agents whose binary was not found, with \"missing\" in the BIN column. Model " +
-			"enrichment is off by default to stay offline-fast once the catalog is cached; " +
-			"--models opts in.",
+		Long: "List the AI coding agents detected on this machine. Each agent's model count " +
+			"is enriched from models.dev, served from the local cache when warm and degrading " +
+			"to zero when models.dev cannot be reached. --all adds the catalogued agents whose " +
+			"binary was not found, with \"missing\" in the BIN column.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := a.requireConfig()
@@ -42,21 +43,39 @@ func (a *app) newListCmd() *cobra.Command {
 				warnings = append(warnings, "agent catalog is stale: re-resolution failed, using the last resolved version")
 			}
 
-			opts := append(cfg.LibraryOptions(flags), agentdex.WithCatalog(cat))
+			base := append(cfg.LibraryOptions(flags), agentdex.WithCatalog(cat))
 			if all {
-				opts = append(opts, agentdex.IncludeMissing())
+				base = append(base, agentdex.IncludeMissing())
 			}
-			if models {
-				// list attaches a client only under --models so a default list never
-				// blocks on the network.
-				opts = append(opts, agentdex.WithModels(cfg.ModelsClient(), agentdex.EnrichModels()))
+			// Probe models.dev once for reachability, reusing this client for the
+			// enrichment below so the catalog is fetched at most once (the client
+			// memoises it). Enrichment is served from the warm cache with no network
+			// and degrades to a nil model list when models.dev is unreachable, so a
+			// model count column is shown without ever failing the listing. But an
+			// unreachable-and-uncached models.dev warns, so the resulting zero reads as
+			// "unavailable" rather than a genuine empty catalog — as loud as get's
+			// degrade and the schema-drift branch below. A malformed catalog is left to
+			// that branch (Catalog does not surface per-provider drift). The defensive
+			// copy keeps base intact for the schema-drift fallback.
+			client := cfg.ModelsClient()
+			opts := append(append([]agentdex.Option(nil), base...), agentdex.WithModels(client, agentdex.EnrichModels()))
+			if _, cerr := client.Catalog(cmd.Context()); cerr != nil && !errors.Is(cerr, modelsdev.ErrModelsSchema) {
+				warnings = append(warnings, "model counts unavailable: models.dev is unreachable and not cached")
+				opts = base
 			}
 
 			agents, err := agentdex.Detect(cmd.Context(), opts...)
+			if errors.Is(err, modelsdev.ErrModelsSchema) {
+				// Malformed models.dev data would otherwise kill the whole listing over
+				// an auxiliary column. Detection itself is sound, so re-detect without
+				// enrichment and warn: the drift stays loud, but list keeps working.
+				warnings = append(warnings, fmt.Sprintf("model counts omitted: %v", err))
+				agents, err = agentdex.Detect(cmd.Context(), base...)
+			}
 			if err != nil {
 				return a.fail(cmd, codeFor(err), err)
 			}
-			a.log.Debug("list detected agents", "count", len(agents), "models", models, "all", all)
+			a.log.Debug("list detected agents", "count", len(agents), "all", all)
 
 			// Under --all, detected agents read first; the not-found tail keeps the
 			// library's by-id order within each group.
@@ -65,24 +84,19 @@ func (a *app) newListCmd() *cobra.Command {
 			recs := make([]*record, len(agents))
 			for i := range agents {
 				r := agentRecord(&agents[i])
-				if models {
-					withModels(r, agents[i].Models)
-				}
+				withModels(r, agents[i].Models)
 				recs[i] = r
 			}
 
-			// Compose the table columns: --verbose widens them, --models appends a
-			// model-count column. These are text-table affordances only; the JSON
-			// payload always carries the full record (driven by the user's --fields
-			// selection), so neither widens it. An explicit --fields wins over both.
+			// Compose the table columns: --verbose widens them. This is a text-table
+			// affordance only; the JSON payload always carries the full record (driven
+			// by the user's --fields selection), so it is unaffected. An explicit
+			// --fields wins over both.
 			tableCols := fields
 			if len(tableCols) == 0 {
 				tableCols = agentFieldSet.defaults
 				if a.verbose {
 					tableCols = agentVerboseFields
-				}
-				if models {
-					tableCols = append(append([]string(nil), tableCols...), "models")
 				}
 			}
 
@@ -101,7 +115,7 @@ func (a *app) newListCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "Include catalogued agents that were not detected")
-	cmd.Flags().BoolVar(&models, "models", false, "Enrich each agent with its models.dev models")
 	registerFieldsFlag(cmd, &fields)
+	addFieldsHelpSection(cmd, agentFieldSet)
 	return cmd
 }
