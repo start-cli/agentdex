@@ -142,6 +142,22 @@ func TestModelsTransientWhenUnreachable(t *testing.T) {
 	}
 }
 
+func TestModelsMissingAgentIsHelpfulUsage(t *testing.T) {
+	// No agent argument is a usage fault (exit 2) reported through the shared path,
+	// not cobra's terse "accepts between 1 and 2 arg(s)" — the message points at how
+	// to discover valid agent ids.
+	srv := modelsServer(t, []string{"anthropic"})
+	newScenario(t, srv.URL, "alpha-cli")
+
+	got := runCLI("models")
+	if got.code != codeUsage {
+		t.Fatalf("models with no agent exit = %d, want 2; stderr=%q", got.code, got.stderr)
+	}
+	if !strings.Contains(got.stderr, "requires an agent") || !strings.Contains(got.stderr, "agentdex list") {
+		t.Errorf("missing-agent error should be helpful, got: %q", got.stderr)
+	}
+}
+
 func TestModelsUnknownAgent(t *testing.T) {
 	srv := modelsServer(t, []string{"anthropic"})
 	newScenario(t, srv.URL, "alpha-cli")

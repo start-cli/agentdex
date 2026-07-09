@@ -22,8 +22,14 @@ func (a *app) newModelsCmd() *cobra.Command {
 		Short:   "List the models available to an agent",
 		Long: "List the provider models available to an agent, with pricing, limits, and " +
 			"capabilities. With a query, fuzzy-match a single model; an ambiguous query lists candidates.",
-		Args: cobra.RangeArgs(1, 2),
+		// MaximumNArgs, not RangeArgs(1, 2): the missing-agent case is handled in
+		// RunE so it reports through the shared usage path — a helpful message that
+		// carries the JSON envelope — rather than cobra's terse arg-count error.
+		Args: cobra.MaximumNArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if len(args) == 0 {
+				return a.usage(cmd, errors.New(`models requires an agent argument; run "agentdex list --all" to see agent ids`))
+			}
 			cfg, err := a.requireConfig()
 			if err != nil {
 				return a.failConfig(cmd, err)
