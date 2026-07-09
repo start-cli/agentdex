@@ -52,6 +52,12 @@ agent, not from memory:
 - `provider`: one or more real models.dev provider ids. This is the join key to
   models.dev enrichment; a wrong id silently drops model data.
 
+When an agent supports the shared `.agents/` and `~/.agents/` convention, prefer
+those paths over the agent's native equivalents for the slot that maps to them
+(usually `skills`), the same way `agy` records `~/.agents/skills` and
+`.agents/skills`. Keep the native location only where the agent has no `.agents`
+mapping for that slot (usually `config`).
+
 ### 2. Add the entry
 
 Add a block alongside the existing agents in `catalog/agents.cue`:
