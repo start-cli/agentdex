@@ -77,16 +77,21 @@ Sibling project `02-provider-agnostic-agents.md` is not implemented yet. Several
 
 12. Amend `02-provider-agnostic-agents.md` so it shares this project's Models policy (OR demand for catalog-agent fill; no `enrich_models`; no `--no-models`). Do not leave "see 03" cross-references; fold the policy into 02 so 02 remains implementable alone. Minimum amend map (line numbers are approximate; match on content if the file drifts):
 
+    - Out of scope bullet on home-provider unfiltered enrichment: keep coverage rollup and list counts as baseline; drop "model listing" as something unfiltered get must retain. Unfiltered get Models fill is opt-in under the OR rule (this project's requirement 2), not a preserved default.
+    - Current State CLI sentence that says get enriches models by default: rewrite to Models opt-in (`--models` or field demand) with provider-env still default-on for unfiltered catalog-agent get.
     - Requirement 3 third gate: replace "unfiltered get demands models subject to config `enrich_models` and `--models` / `--no-models`" with the OR rule from this project's requirement 2 (unfiltered get does not demand Models; `--models` or `--fields` including `models` does).
     - Requirement 8 intro: drop `--no-models` and mutual exclusion; describe `--models` as opt-in only.
     - Soft-path bullet that mentions `--no-models` alone: remove that clause (path already omits models).
     - Agnostic `--provider` Found bullet: Models fill follows the OR rule; bare `--provider` without Models demand keeps provider-env and omits Models (replaces `--no-models` examples).
+    - Requirement 8 home-provider unfiltered matrix row (`get <home-provider>` unchanged / plus models): rewrite so unfiltered home-provider get keeps outside facts, provider-env, and coverage rollup, and fills Models only under the OR rule — not "plus models" by default.
+    - Constraints "Home-provider unfiltered/default enrichment behaviour stays as today": rewrite so "today" means post-this-project baseline — provider-env and coverage when the models.dev path fires; Models only under the OR rule; demand-driven field selection (02 requirement 3) still applies.
     - Implementation plan step 5 (CLI flag seam): same third-gate / unfiltered wording as requirement 3.
     - Implementation plan step 9 (tests): replace `get --provider … --no-models` with bare `--provider` (provider-env, no Models) and a separate `--provider --models` (or `--fields models`) case.
     - Implementation guidance bullets that say unfiltered get demands models via config/flags: align with the OR rule and default-off unfiltered get.
     - Acceptance criterion "Models filled under the default enrich flag": require explicit `--models` or field demand for Models on agnostic `--provider` get.
     - Acceptance criterion `get opencode --provider anthropic --no-models`: rewrite to bare `--provider` (provider-env, omit Models).
     - Acceptance criterion `get claude-code` output unchanged: drop or rewrite. After this project, unfiltered home-provider get no longer fills Models by default; 02 must not claim pre-03 byte-identical get output. Keep the intent that home-provider unfiltered get still runs coverage when the models.dev/provider-env path fires, and still rejects `--provider` as usage.
+    - Sweep: after the map edits, grep 02 for `enrich_models`, `--no-models`, "enriches models by default", and "plus models"; any remaining hit must match the OR rule and default-off unfiltered Models, or be rewritten.
 
 ## Constraints
 
