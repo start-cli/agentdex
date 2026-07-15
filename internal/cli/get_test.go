@@ -18,6 +18,7 @@ func anyContains(ss []string, sub string) bool {
 }
 
 func TestGetAllPresent(t *testing.T) {
+	// Unfiltered get keeps provider-env and omits Models (opt-in only).
 	srv := modelsServer(t, []string{"anthropic"})
 	newScenario(t, srv.URL, "alpha-cli")
 
@@ -29,8 +30,122 @@ func TestGetAllPresent(t *testing.T) {
 	if _, ok := data["provider_env"]; !ok {
 		t.Errorf("provider_env missing from all-present get: %v", data)
 	}
+	if _, ok := data["models"]; ok {
+		t.Errorf("unfiltered get should omit models: %v", data["models"])
+	}
+
+	// Text surface: Models section absent; Provider env present. Match whole
+	// lines only — temp paths can embed the test name substring "Models".
+	text := runCLI("get", "alpha-cli")
+	if text.code != codeOK {
+		t.Fatalf("get text exit = %d, stderr=%q", text.code, text.stderr)
+	}
+	if hasTextSection(text.stdout, "Models") {
+		t.Errorf("bare get text should omit Models section:\n%s", text.stdout)
+	}
+	if !hasTextSection(text.stdout, "Provider env") {
+		t.Errorf("bare get text should keep Provider env section:\n%s", text.stdout)
+	}
+}
+
+func TestGetModelsOptIn(t *testing.T) {
+	srv := modelsServer(t, []string{"anthropic"})
+	newScenario(t, srv.URL, "alpha-cli")
+
+	got := runCLI("--json", "get", "alpha-cli", "--models")
+	if got.code != codeOK {
+		t.Fatalf("get --models exit = %d, stderr=%q", got.code, got.stderr)
+	}
+	data := got.envelope(t).Data.(map[string]any)
+	if _, ok := data["provider_env"]; !ok {
+		t.Errorf("provider_env missing from --models get: %v", data)
+	}
 	if models, ok := data["models"].([]any); !ok || len(models) == 0 {
-		t.Errorf("models missing or empty in all-present get: %v", data["models"])
+		t.Errorf("models missing or empty with --models: %v", data["models"])
+	}
+
+	text := runCLI("get", "alpha-cli", "--models")
+	if text.code != codeOK {
+		t.Fatalf("get --models text exit = %d, stderr=%q", text.code, text.stderr)
+	}
+	if !hasTextSection(text.stdout, "Models") {
+		t.Errorf("get --models text should show Models section:\n%s", text.stdout)
+	}
+}
+
+func TestGetFieldsModelsDemandsFill(t *testing.T) {
+	srv := modelsServer(t, []string{"anthropic"})
+	newScenario(t, srv.URL, "alpha-cli")
+
+	got := runCLI("--json", "get", "alpha-cli", "--fields", "models")
+	if got.code != codeOK {
+		t.Fatalf("get --fields models exit = %d, stderr=%q", got.code, got.stderr)
+	}
+	data := got.envelope(t).Data.(map[string]any)
+	if models, ok := data["models"].([]any); !ok || len(models) == 0 {
+		t.Errorf("--fields models should fill models: %v", data["models"])
+	}
+}
+
+func TestGetFieldsOmitModelsKey(t *testing.T) {
+	// Presentation only: field selection drops models from the record either
+	// way. Demand skip for non-models fields is TestModelsDemand ("fields
+	// other") and unfiltered omit is TestGetAllPresent.
+	srv := modelsServer(t, []string{"anthropic"})
+	newScenario(t, srv.URL, "alpha-cli")
+
+	got := runCLI("--json", "get", "alpha-cli", "--fields", "skills_dir")
+	if got.code != codeOK {
+		t.Fatalf("get --fields skills_dir exit = %d, stderr=%q", got.code, got.stderr)
+	}
+	data := got.envelope(t).Data.(map[string]any)
+	if _, ok := data["models"]; ok {
+		t.Errorf("output should omit models when not selected: %v", data)
+	}
+	if _, ok := data["skills_dir"]; !ok {
+		t.Errorf("expected skills_dir in selection: %v", data)
+	}
+}
+
+func TestGetModelsFlagFieldsOmitPresentation(t *testing.T) {
+	// Demand that --models still fills when fields omit models is covered by
+	// TestModelsDemand ("flag and omit fields"). This integration test only
+	// checks presentation: selected skills_dir, models key absent from output.
+	srv := modelsServer(t, []string{"anthropic"})
+	newScenario(t, srv.URL, "alpha-cli")
+
+	got := runCLI("--json", "get", "alpha-cli", "--models", "--fields", "skills_dir")
+	if got.code != codeOK {
+		t.Fatalf("get --models --fields skills_dir exit = %d, stderr=%q", got.code, got.stderr)
+	}
+	data := got.envelope(t).Data.(map[string]any)
+	if _, ok := data["models"]; ok {
+		t.Errorf("output should omit models when not selected: %v", data)
+	}
+	if _, ok := data["skills_dir"]; !ok {
+		t.Errorf("expected skills_dir in selection: %v", data)
+	}
+}
+
+// hasTextSection reports whether stdout contains a whole-line section header
+// equal to title. Substring search is unsafe: t.TempDir paths include the test
+// name and can embed words like "Models".
+func hasTextSection(stdout, title string) bool {
+	for _, line := range strings.Split(stdout, "\n") {
+		if strings.TrimSpace(line) == title {
+			return true
+		}
+	}
+	return false
+}
+
+func TestGetNoModelsFlagRejected(t *testing.T) {
+	srv := modelsServer(t, []string{"anthropic"})
+	newScenario(t, srv.URL, "alpha-cli")
+
+	got := runCLI("get", "alpha-cli", "--no-models")
+	if got.code != codeUsage {
+		t.Fatalf("--no-models exit = %d, want 2; stderr=%q", got.code, got.stderr)
 	}
 }
 
@@ -133,7 +248,8 @@ func TestGetUnknownQuery(t *testing.T) {
 }
 
 func TestGetUncataloguedProviderMatch(t *testing.T) {
-	// "google" is not a catalog agent but is a models.dev provider.
+	// "google" is not a catalog agent but is a models.dev provider. Without
+	// --models the fallthrough reports identity only — no models dump.
 	srv := modelsServer(t, []string{"google"})
 	newScenario(t, srv.URL, "alpha-cli")
 
@@ -144,6 +260,52 @@ func TestGetUncataloguedProviderMatch(t *testing.T) {
 	data, ok := got.envelope(t).Data.(map[string]any)
 	if !ok || data["provider"] != "google" {
 		t.Errorf("expected provider data labelled google: %v", got.envelope(t).Data)
+	}
+	if _, ok := data["models"]; ok {
+		t.Errorf("fallthrough without --models should omit models: %v", data)
+	}
+	if data["name"] == nil || data["name"] == "" {
+		t.Errorf("fallthrough should report provider name: %v", data)
+	}
+
+	text := runCLI("get", "google")
+	if text.code != codeNotFound {
+		t.Fatalf("fallthrough text exit = %d, want 3; stderr=%q", text.code, text.stderr)
+	}
+	if !hasTextSection(text.stdout, "Provider") {
+		t.Errorf("fallthrough text should show Provider section:\n%s", text.stdout)
+	}
+	if hasTextSection(text.stdout, "Models") {
+		t.Errorf("fallthrough without --models should omit Models section:\n%s", text.stdout)
+	}
+}
+
+func TestGetUncataloguedProviderMatchWithModels(t *testing.T) {
+	srv := modelsServer(t, []string{"google"})
+	newScenario(t, srv.URL, "alpha-cli")
+
+	got := runCLI("--json", "get", "google", "--models")
+	if got.code != codeNotFound {
+		t.Fatalf("uncatalogued-provider --models exit = %d, want 3; stderr=%q", got.code, got.stderr)
+	}
+	data, ok := got.envelope(t).Data.(map[string]any)
+	if !ok || data["provider"] != "google" {
+		t.Errorf("expected provider data labelled google: %v", got.envelope(t).Data)
+	}
+	models, ok := data["models"].([]any)
+	if !ok || len(models) == 0 {
+		t.Errorf("fallthrough --models should include models: %v", data["models"])
+	}
+
+	text := runCLI("get", "google", "--models")
+	if text.code != codeNotFound {
+		t.Fatalf("fallthrough --models text exit = %d, want 3; stderr=%q", text.code, text.stderr)
+	}
+	if !hasTextSection(text.stdout, "Provider") {
+		t.Errorf("fallthrough --models text should keep Provider section:\n%s", text.stdout)
+	}
+	if !hasTextSection(text.stdout, "Models") {
+		t.Errorf("fallthrough --models text should show Models section:\n%s", text.stdout)
 	}
 }
 
@@ -243,19 +405,26 @@ func TestGetTextDetailDrivenByRecord(t *testing.T) {
 	}
 }
 
-func TestGetNoModelsKeepsProviderEnv(t *testing.T) {
-	srv := modelsServer(t, []string{"anthropic"})
-	newScenario(t, srv.URL, "alpha-cli")
-
-	got := runCLI("--json", "get", "alpha-cli", "--no-models")
-	if got.code != codeOK {
-		t.Fatalf("--no-models exit = %d, stderr=%q", got.code, got.stderr)
+func TestModelsDemand(t *testing.T) {
+	cases := []struct {
+		name   string
+		flag   bool
+		fields []string
+		want   bool
+	}{
+		{"unfiltered", false, nil, false},
+		{"empty fields", false, []string{}, false},
+		{"flag only", true, nil, true},
+		{"fields models", false, []string{"models"}, true},
+		{"fields other", false, []string{"skills_dir"}, false},
+		{"flag and omit fields", true, []string{"skills_dir"}, true},
+		{"fields models among others", false, []string{"id", "models"}, true},
 	}
-	data := got.envelope(t).Data.(map[string]any)
-	if _, ok := data["provider_env"]; !ok {
-		t.Errorf("--no-models should keep provider_env: %v", data)
-	}
-	if _, ok := data["models"]; ok {
-		t.Errorf("--no-models should omit models: %v", data)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := modelsDemand(tc.flag, tc.fields); got != tc.want {
+				t.Errorf("modelsDemand(%v, %v) = %v, want %v", tc.flag, tc.fields, got, tc.want)
+			}
+		})
 	}
 }

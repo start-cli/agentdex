@@ -59,36 +59,14 @@ func TestMalformedConfigDoesNotBreakVersion(t *testing.T) {
 	}
 }
 
-func TestEnrichPrecedenceConfigDisables(t *testing.T) {
-	srv := modelsServer(t, []string{"anthropic"})
-	s := newScenario(t, srv.URL, "alpha-cli")
-	// enrich_models false makes get default to no per-model enrichment.
-	s.writeConfig(t, configBody(srv.URL, s.binDir, "enrich_models: false\n"))
+func TestConfigRejectsRemovedEnrichModels(t *testing.T) {
+	// leftover enrich_models fails closed-schema validation (exit 78).
+	s := newScenario(t, "", "alpha-cli")
+	s.writeConfig(t, configBody("", s.binDir, "enrich_models: false\n"))
 
-	got := runCLI("--json", "get", "alpha-cli")
-	if got.code != codeOK {
-		t.Fatalf("get exit = %d, stderr=%q", got.code, got.stderr)
-	}
-	data := got.envelope(t).Data.(map[string]any)
-	if _, ok := data["models"]; ok {
-		t.Errorf("enrich_models:false should omit models by default: %v", data)
-	}
-	if _, ok := data["provider_env"]; !ok {
-		t.Errorf("provider_env should still show: %v", data)
-	}
-}
-
-func TestEnrichPrecedenceFlagOverridesConfig(t *testing.T) {
-	srv := modelsServer(t, []string{"anthropic"})
-	s := newScenario(t, srv.URL, "alpha-cli")
-	s.writeConfig(t, configBody(srv.URL, s.binDir, "enrich_models: false\n"))
-
-	got := runCLI("--json", "get", "alpha-cli", "--models")
-	if got.code != codeOK {
-		t.Fatalf("get --models exit = %d, stderr=%q", got.code, got.stderr)
-	}
-	if _, ok := got.envelope(t).Data.(map[string]any)["models"]; !ok {
-		t.Errorf("--models should override enrich_models:false")
+	got := runCLI("list")
+	if got.code != codeConfig {
+		t.Fatalf("enrich_models leftover exit = %d, want 78; stderr=%q", got.code, got.stderr)
 	}
 }
 

@@ -25,9 +25,6 @@ func TestLoadMissingFileIsEmptyDefaults(t *testing.T) {
 	if got.CatalogModule != "github.com/start-cli/agentdex/catalog@v1" {
 		t.Errorf("CatalogModule = %q, want the default module path", got.CatalogModule)
 	}
-	if !got.EnrichModels {
-		t.Error("EnrichModels = false, want default true")
-	}
 	if got.Color != "auto" {
 		t.Errorf("Color = %q, want default auto", got.Color)
 	}
@@ -44,7 +41,6 @@ models: url: "https://mirror.example/catalog.json"
 search_dirs: ["/opt/bin", "/usr/local/bin"]
 bin_paths: "claude-code": "/custom/claude"
 disabled_agents: ["foo"]
-enrich_models: false
 color: "never"
 `)
 	got, err := Load(path)
@@ -59,9 +55,6 @@ color: "never"
 	}
 	if got.ModelsURL != "https://mirror.example/catalog.json" {
 		t.Errorf("ModelsURL = %q", got.ModelsURL)
-	}
-	if got.EnrichModels {
-		t.Error("EnrichModels = true, want explicit false")
 	}
 	if got.Color != "never" {
 		t.Errorf("Color = %q, want never", got.Color)
@@ -79,6 +72,15 @@ func TestLoadRejectsUnknownField(t *testing.T) {
 	_, err := Load(path)
 	if !errors.Is(err, ErrConfig) {
 		t.Fatalf("Load unknown field err = %v, want ErrConfig", err)
+	}
+}
+
+func TestLoadRejectsRemovedEnrichModels(t *testing.T) {
+	// enrich_models was removed; leftover keys fail closed-schema validation.
+	path := writeConfig(t, `enrich_models: false`)
+	_, err := Load(path)
+	if !errors.Is(err, ErrConfig) {
+		t.Fatalf("Load enrich_models err = %v, want ErrConfig", err)
 	}
 }
 

@@ -19,9 +19,8 @@ import (
 
 func (a *app) newGetCmd() *cobra.Command {
 	var (
-		noModels bool
-		models   bool
-		fields   []string
+		models bool
+		fields []string
 	)
 	cmd := &cobra.Command{
 		Use:     "get <agent>",
@@ -29,16 +28,13 @@ func (a *app) newGetCmd() *cobra.Command {
 		GroupID: groupCore,
 		Short:   "Show detail for one agent",
 		Long: "Show detection detail for one agent: its binary, version, config and skills " +
-			"paths, provider-env presence, and the models its providers offer. Model enrichment " +
-			"is on by default (configurable); --no-models opts out while keeping provider-env.",
+			"paths, and provider-env presence. Models are off by default; pass --models or " +
+			"include models in --fields to fill the per-model list.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := a.requireConfig()
 			if err != nil {
 				return a.failConfig(cmd, err)
-			}
-			if models && noModels {
-				return a.usage(cmd, errors.New("--models and --no-models are mutually exclusive"))
 			}
 			flags, err := a.mapFlags()
 			if err != nil {
@@ -59,7 +55,7 @@ func (a *app) newGetCmd() *cobra.Command {
 			case match.Ambiguous:
 				return a.fail(cmd, codeNotFound, fmt.Errorf("ambiguous agent %q: matches %s", args[0], strings.Join(candidates, ", ")), warnings...)
 			case match.None:
-				return a.getFallthrough(cmd, cfg.ModelsClient(), cat, args[0], warnings)
+				return a.getFallthrough(cmd, cfg.ModelsClient(), cat, args[0], models, warnings)
 			}
 			a.log.Debug("get resolved agent", "id", id)
 
@@ -76,20 +72,28 @@ func (a *app) newGetCmd() *cobra.Command {
 				return a.reportAgentError(cmd, agent, fields, codeNotFound, err, warnings)
 			}
 
-			enrich := cfg.EnrichModels
-			if noModels {
-				enrich = false
-			} else if models {
-				enrich = true
-			}
-			return a.getCoverage(cmd, cfg, flags, cat, agent, enrich, fields, warnings)
+			return a.getCoverage(cmd, cfg, flags, cat, agent, modelsDemand(models, fields), fields, warnings)
 		},
 	}
-	cmd.Flags().BoolVar(&models, "models", false, "Force per-model enrichment on")
-	cmd.Flags().BoolVar(&noModels, "no-models", false, "Skip per-model enrichment (provider-env still shows)")
+	cmd.Flags().BoolVar(&models, "models", false, "Fill the per-model list from models.dev")
 	registerFieldsFlag(cmd, &fields)
 	addFieldsHelpSection(cmd, agentFieldSet)
 	return cmd
+}
+
+// modelsDemand is the OR rule for catalog-agent Models fill: --models, or a
+// non-empty --fields selection that includes models. Empty fields is unfiltered
+// and does not demand Models on its own.
+func modelsDemand(modelsFlag bool, fields []string) bool {
+	if modelsFlag {
+		return true
+	}
+	for _, f := range fields {
+		if f == "models" {
+			return true
+		}
+	}
+	return false
 }
 
 // addHelpSection injects a titled, pre-formatted section into the command's help,
@@ -226,11 +230,12 @@ func (a *app) getCoverage(cmd *cobra.Command, cfg *config.Config, flags config.F
 }
 
 // getFallthrough handles a query that matched no catalog agent: it is classified
-// against models.dev's providers. A unique provider match reports that provider's
-// data at exit 3; no provider match is genuinely unknown at exit 2. If models.dev
-// cannot be reached the query cannot be classified at all, so it exits transient
-// rather than asserting either verdict.
-func (a *app) getFallthrough(cmd *cobra.Command, client *modelsdev.Client, cat *agentdex.Catalog, query string, warnings []string) error {
+// against models.dev's providers. A unique provider match reports that provider
+// at exit 3; the models dump is included only when withModels is true. No provider
+// match is genuinely unknown at exit 2. If models.dev cannot be reached the query
+// cannot be classified at all, so it exits transient rather than asserting either
+// verdict.
+func (a *app) getFallthrough(cmd *cobra.Command, client *modelsdev.Client, cat *agentdex.Catalog, query string, withModels bool, warnings []string) error {
 	outcome, prov, _, err := matchProvider(cmd.Context(), client, query)
 	if err != nil {
 		return a.fail(cmd, codeTransient, fmt.Errorf("cannot classify %q: models.dev is unreachable: %w", query, err), warnings...)
@@ -238,26 +243,41 @@ func (a *app) getFallthrough(cmd *cobra.Command, client *modelsdev.Client, cat *
 	if outcome != match.Unique {
 		return a.fail(cmd, codeUsage, fmt.Errorf("no such agent %q; valid ids: %s", query, strings.Join(catalogIDs(cat), ", ")), warnings...)
 	}
-	a.log.Debug("get fallthrough matched provider", "query", query, "provider", prov.ID)
+	a.log.Debug("get fallthrough matched provider", "query", query, "provider", prov.ID, "models", withModels)
 
-	models := make([]modelsdev.Model, 0, len(prov.Models))
-	for _, key := range sortedKeys(prov.Models) {
-		models = append(models, prov.Models[key])
-	}
-	sortModelsNewest(models)
-	recs := make([]*record, len(models))
-	for i, m := range models {
-		recs[i] = modelRecord(m, prov.ID, "")
-	}
 	data := map[string]any{
 		"provider": prov.ID,
 		"name":     prov.Name,
-		"models":   jsonRecords(recs),
 	}
-	_, headers, rows, _ := tabulate(recs, nil, modelFieldSet.defaults, modelFieldSet)
 	note := fmt.Errorf("%q is not a catalogued agent; showing models.dev provider %q (install details unavailable, not catalogued)", query, prov.ID)
+
+	var modelRecs []*record
+	if withModels {
+		models := make([]modelsdev.Model, 0, len(prov.Models))
+		for _, key := range sortedKeys(prov.Models) {
+			models = append(models, prov.Models[key])
+		}
+		sortModelsNewest(models)
+		modelRecs = make([]*record, len(models))
+		for i, m := range models {
+			modelRecs[i] = modelRecord(m, prov.ID, "")
+		}
+		data["models"] = jsonRecords(modelRecs)
+	}
+
 	return a.failData(cmd, codeNotFound, note, data, func(w io.Writer) {
 		fmt.Fprintln(w)
+		fmt.Fprintln(w, tui.Header.Sprint("Provider"))
+		renderDetail(w, []field{
+			{key: "provider", text: prov.ID},
+			{key: "name", text: prov.Name},
+		})
+		if !withModels {
+			return
+		}
+		fmt.Fprintln(w)
+		fmt.Fprintln(w, tui.Header.Sprint("Models"))
+		_, headers, rows, _ := tabulate(modelRecs, nil, modelFieldSet.defaults, modelFieldSet)
 		renderTable(w, headers, rows, "No models.")
 		if len(rows) > 0 {
 			renderPriceFooter(w, modelFieldSet.defaults)

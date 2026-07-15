@@ -57,7 +57,7 @@ func agentRecord(a *agentdex.Agent) *record {
 }
 
 // withProviderEnv adds the provider-env field to an agent record. Provider-env is
-// shown whenever a client was consulted, including under --no-models.
+// shown whenever a client was consulted, independent of Models fill.
 func withProviderEnv(r *record, env map[string]bool) {
 	if env == nil {
 		return

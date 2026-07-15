@@ -607,10 +607,11 @@ of whether the agent is actually usable. Sourced entirely from the models.dev
 providers map; nothing added to the catalog. It is enrichment, not core detection:
 it requires a models.dev client (attached via `WithModels`) and is left nil when none
 is attached or models.dev is unreachable, never failing `Detect`. It needs only the
-small providers map, so `get` attaches the client unconditionally and adds
-`EnrichModels()` unless `--no-models`, keeping provider-env on even under
-`--no-models`; `list` also attaches the client and enriches unconditionally, served
-from the warm models.dev cache with no network and degrading to a zero count (with a
+small providers map, so `get` attaches the client by default for catalog agents
+(provider-env without requiring Models fill) and passes `EnrichModels()` only when
+Models is demanded (`--models` or a `--fields` selection that includes `models`);
+`list` attaches the client and enriches model counts unconditionally, served from
+the warm models.dev cache with no network and degrading to a zero count (with a
 warning) when models.dev is unreachable.
 
 ## Catalog and models.dev coverage
@@ -627,10 +628,10 @@ agent-level outcome is a rollup of those per-provider verdicts:
 
 | catalog | providers in models.dev | meaning | result |
 | --- | --- | --- | --- |
-| yes | all present | fully supported agent | report agent, enrich models, exit 0 |
-| yes | some present | partially supported: at least one provider enriches, at least one is absent | report agent, enrich from the present providers, emit a warning naming the absent provider(s), exit 0; the absent providers are flagged per provider by catalog validation and start doctor |
+| yes | all present | fully supported agent | report agent, provider-env by default, fill Models only when demanded, exit 0 |
+| yes | some present | partially supported: at least one provider is present, at least one is absent | report agent, provider-env and (when demanded) Models from the present providers, emit a warning naming the absent provider(s), exit 0; the absent providers are flagged per provider by catalog validation and start doctor |
 | yes | none present | catalog agent whose every provider is absent from models.dev: a catalog data error | report agent, emit error, exit 78; also flagged by catalog validation and start doctor |
-| no | query matches a models.dev provider | not a catalog agent, but the query names a provider models.dev knows | report that provider and its models.dev models, labelled as provider data not an agent, note that install details are unavailable because it is not catalogued, exit 3; flagged by catalog validation and start doctor as a coverage gap |
+| no | query matches a models.dev provider | not a catalog agent, but the query names a provider models.dev knows | report that provider's identity, labelled as provider data not an agent, note that install details are unavailable because it is not catalogued, exit 3; include the provider's model list only with `--models`; flagged by catalog validation and start doctor as a coverage gap |
 | no | query matches no models.dev provider | unknown | informational: no such agent, likely a typo, list valid catalog ids, exit 2 |
 
 The split is deliberate: get is detection and enrichment, not validation, so a
@@ -648,12 +649,13 @@ while a model-centric command fails transient (exit 75). See CLI get behaviour.
 The library returns `ErrAgentUnknown` whenever a query matches no catalog agent
 (the two no rows). The CLI then matches the query against models.dev provider ids and
 names (exact, then unique substring or prefix) to choose between the no/yes path
-(report that provider and its models.dev models, exit 3) and the no/no path (exit 2).
-Model ids are not matched here: an agent maps onto models.dev only through a provider,
-so the provider axis is the only one an uncatalogued agent could resolve against, and
-the data reported is that provider's, not the uncatalogued agent's models. An agent's
-name rarely equals a provider id, so the no/yes path fires mainly when the query itself
-names a provider; it is a discovery aid, not a claim that the query is a known agent.
+(report that provider's identity and, with `--models`, its model list, exit 3) and
+the no/no path (exit 2). Model ids are not matched here: an agent maps onto models.dev
+only through a provider, so the provider axis is the only one an uncatalogued agent
+could resolve against, and the data reported is that provider's, not the uncatalogued
+agent's models. An agent's name rarely equals a provider id, so the no/yes path fires
+mainly when the query itself names a provider; it is a discovery aid, not a claim
+that the query is a known agent.
 
 ## CLI
 
@@ -708,12 +710,15 @@ Behaviour:
   (descending release_date, ties by id) and carry a muted footer naming the
   pricing unit: `Prices in USD per 1M tokens (models.dev)`. Both are text-surface
   presentation; JSON model arrays follow the same order but carry raw numbers.
-- `get <agent>` enriches models and reports provider env presence by default.
-  `--no-models` opts out of the per-model enrichment; provider-env still shows, since
-  it needs only the providers map. When detection succeeds but models.dev is unreachable with no
-  cache, get degrades: it prints the detected agent, omits the Models and provider-env
-  sections, emits a warning that model enrichment was unavailable, and exits 0.
-  Enrichment is not the point of get, so its absence does not fail the command.
+- `get <agent>` reports provider-env presence by default for catalog agents (it
+  needs only the providers map). Models fill is opt-in: pass `--models`, or a
+  non-empty `--fields` selection that includes `models`. Empty `--fields` is
+  unfiltered and does not demand Models. When detection succeeds but models.dev is
+  unreachable with no cache, get degrades: it prints the detected agent, omits the
+  Models and provider-env sections, emits a warning that model enrichment was
+  unavailable, and exits 0. Enrichment is not the point of get, so its absence does
+  not fail the command. Provider fallthrough (query matches no catalog agent but a
+  models.dev provider) includes the model list only with `--models`.
 - `models <agent> [query]` lists the agent's provider models with pricing, limits,
   and capabilities. With a `query` it applies selector matching: a single match
   prints that model (use `--json` or `--fields canonical_id` to script the canonical
@@ -751,9 +756,10 @@ Behaviour:
   models.dev stays exit 0 and warns about any absent provider; a catalog agent whose
   every provider is absent from a reachable models.dev is a catalog data error,
   exit 78; a query that is not a catalog agent but names a models.dev provider reports
-  that provider's models.dev data, labelled as provider data, exit 3; a query that
-  matches neither a catalog agent nor a models.dev provider is genuinely unknown,
-  exit 2 (`ErrAgentUnknown`). A known catalog agent that is not installed is not
+  that provider's identity (and its model list only with `--models`), labelled as
+  provider data, exit 3; a query that matches neither a catalog agent nor a
+  models.dev provider is genuinely unknown, exit 2 (`ErrAgentUnknown`). A known
+  catalog agent that is not installed is not
   found, exit 3, but still renders the catalogued detail first (resolved config
   paths, providers, homepage, bin reading `missing`); under --json the envelope
   carries both the data and the error. In get's text detail the bin line always
@@ -783,21 +789,16 @@ models: {
 search_dirs?: [...string]          // persistent extra binary search locations
 bin_paths?: [string]: string       // persistent per-agent binary path override, id -> path
 disabled_agents?: [...string]      // catalog ids to skip during detection
-enrich_models?: bool | *true       // default for get per-model enrichment only
 color?: "auto" | "always" | "never" | *"auto"
 ```
 
 TTL resolution per cache: the section ttl, then cache_ttl, then the built-in 24h.
 
-`enrich_models` sets the default for `get`'s per-model enrichment only. It exists so
-a slow or frequently-offline machine can make `get` default to no enrichment without
-typing `--no-models` each time. It does not affect `list`, whose model-count
-enrichment is unconditional (degrading to zero when models.dev is unreachable), nor
-`models`, whose enrichment is inherent.
-Precedence for `get`: an explicit `--models`/`--no-models` flag wins over
-`enrich_models`, which wins over the built-in default. Provider-env reporting is
-unaffected and still shows whenever a client is attached, since it needs only the
-small providers map.
+Models fill on `get` is demand-driven, not a config default: pass `--models` or
+include `models` in `--fields`. There is no config knob that turns Models on
+silently. Provider-env on unfiltered `get` stays default-on (attach the client for
+the providers map). `list` model-count enrichment is unconditional (degrading to
+zero when models.dev is unreachable). The `models` command's enrichment is inherent.
 
 No registry-auth settings are needed; modconfig honours CUE_REGISTRY and cue login.
 
@@ -1011,12 +1012,12 @@ start and library project files) rather than landing everything in one change.
 - Catalog and models.dev are cross-referenced to drive get exit codes, evaluated per
   provider: all providers present 0, some present 0 with a warning naming the absent
   provider(s), every provider absent 78 (catalog data error), not a catalog agent but
-  the query names a models.dev provider 3 (reports that provider's data, labelled as
-  provider data), neither a catalog agent nor a models.dev provider 2. The uncatalogued
-  match is by provider id and name only, never model id; an agent maps onto models.dev
-  through its provider, so the provider axis is the only one an uncatalogued query can
-  resolve against. get degrades to exit 0 with a warning when detection succeeds but
-  models.dev is unreachable.
+  the query names a models.dev provider 3 (reports that provider's identity and, with
+  `--models`, its model list, labelled as provider data), neither a catalog agent nor
+  a models.dev provider 2. The uncatalogued match is by provider id and name only,
+  never model id; an agent maps onto models.dev through its provider, so the provider
+  axis is the only one an uncatalogued query can resolve against. get degrades to exit
+  0 with a warning when detection succeeds but models.dev is unreachable.
 - The catalog id is the map key; #KnownAgent has no id field. The loader sets the
   Go ID from the key.
 - --json is long form only; no -j.

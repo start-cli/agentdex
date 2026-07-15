@@ -42,7 +42,6 @@ type Config struct {
 	SearchDirs    []string
 	BinPaths      map[string]string
 	Disabled      []string
-	EnrichModels  bool
 	Color         string
 }
 
@@ -61,7 +60,6 @@ type raw struct {
 	SearchDirs     []string          `json:"search_dirs"`
 	BinPaths       map[string]string `json:"bin_paths"`
 	DisabledAgents []string          `json:"disabled_agents"`
-	EnrichModels   bool              `json:"enrich_models"`
 	Color          string            `json:"color"`
 }
 
@@ -169,7 +167,6 @@ func resolve(r *raw) (*Config, error) {
 		SearchDirs:    r.SearchDirs,
 		BinPaths:      r.BinPaths,
 		Disabled:      r.DisabledAgents,
-		EnrichModels:  r.EnrichModels,
 		Color:         r.Color,
 	}, nil
 }
