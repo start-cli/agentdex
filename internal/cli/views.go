@@ -124,6 +124,62 @@ func modelRecord(m modelsdev.Model, providerID, canonicalID string) *record {
 	return r
 }
 
+// providerFieldSet is the declared field authority for a models.dev provider: the
+// full ordered set of valid --fields keys and the default listing columns. env is
+// the terse presence-folded column; present is the structured per-variable presence
+// map, selectable but not a default column, so scripts read booleans without
+// parsing the env text's (set) suffix. models stays array-typed (rendered as a
+// count) so a caller reads .data[].models uniformly across commands.
+var providerFieldSet = newFieldSet(
+	[]string{"id", "name", "env", "present", "models", "doc", "npm", "api"},
+	[]string{"id", "name", "env", "models"},
+)
+
+// providerRecord builds the field values for one provider. present maps each of the
+// provider's API-key variable names to whether it is set in the environment; it is
+// computed at the boundary (envPresence) and passed in, so the record builder is
+// testable from inputs. env carries the sorted names for JSON and the presence-folded
+// cell for text; present carries the map itself.
+func providerRecord(p modelsdev.Provider, present map[string]bool) *record {
+	r := newRecord(providerFieldSet)
+	r.add("id", p.ID, p.ID)
+	r.add("name", p.Name, p.Name)
+	// The declared API-key variables come from p.Env, the source of truth; present
+	// only supplies the (set) markers. A copy keeps the [] JSON shape for a
+	// no-env provider rather than a null.
+	envNames := make([]string, len(p.Env))
+	copy(envNames, p.Env)
+	sort.Strings(envNames)
+	r.add("env", envNames, providerEnvCell(envNames, present))
+	r.add("present", present, formatProviderEnv(present))
+	models := make([]modelsdev.Model, 0, len(p.Models))
+	for _, key := range sortedKeys(p.Models) {
+		models = append(models, p.Models[key])
+	}
+	withModels(r, models)
+	r.add("doc", p.Doc, orDash(p.Doc))
+	r.add("npm", p.NPM, orDash(p.NPM))
+	r.add("api", p.API, orDash(p.API))
+	return r
+}
+
+// providerEnvCell renders the presence-folded ENV column over names (already
+// sorted): a set variable suffixed "(set)" and an unset one left bare, so a bare
+// name means unset. A provider with no declared variable renders blank. The terse
+// divergence from get's symmetric (set)/(unset) markers keeps the wide browse
+// listing legible.
+func providerEnvCell(names []string, present map[string]bool) string {
+	parts := make([]string, 0, len(names))
+	for _, k := range names {
+		if present[k] {
+			parts = append(parts, k+" "+plainState("set", true))
+			continue
+		}
+		parts = append(parts, k)
+	}
+	return strings.Join(parts, ", ")
+}
+
 // newerModel reports whether a sorts before b in a newest-first model listing:
 // later release_date first (ISO dates compare lexically), undated models last,
 // ties broken by id so the order stays deterministic.

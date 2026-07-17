@@ -709,6 +709,7 @@ The CLI is a thin wrapper over the library. Single domain, so the noun is omitte
 agentdex list                    detected agents, table by default
 agentdex get <agent>             detail for one agent (aliases: view, show)
 agentdex models <agent> [query]  models available to the agent; query fuzzy-matches
+agentdex providers [filter]      models.dev providers usable with --provider; filter narrows
 agentdex refresh [target]        force refresh caches: catalog | models | all
 agentdex skills <agent> [name]   skills in the agent's skills dir (read-only)
 agentdex version
@@ -720,14 +721,22 @@ Selector matching:
 Every positional selector — `<agent>`, the model `[query]`, the skill `[name]` —
 resolves by the same rule against its relevant set (catalog agents, the agent's
 models, the skills found in the dir): exact match first (id, then case-insensitive
-name), then a unique substring or prefix match. The outcome drives behaviour:
+name), then a unique substring or prefix match. The `providers [filter]` positional
+is the one exception, carved out below. The outcome drives behaviour:
 
 - none matched: report that nothing matched and exit 3
 - one matched: act on that single match
 - two or more matched: list the candidates so the user can refine, and exit 3
 
-This is one rule applied everywhere, so `agentdex models <agent> sonnet` resolving
-to a single model is the CLI surface of the library `ResolveModel`. The agent
+The `providers [filter]` positional does not follow this rule. It is a browse
+narrowing, not a selector: it filters the provider list by case-insensitive
+substring over id and name, so a filter matching several providers lists all of
+them (no ambiguity is reported) and a filter matching none is a normal empty
+listing at exit 0, not a not-found at exit 3.
+
+This one rule governs every selector (providers aside), so `agentdex models
+<agent> sonnet` resolving to a single model is the CLI surface of the library
+`ResolveModel`. The agent
 selector adds one distinction handled below: a query that matches a known agent
 which is simply not installed is reported differently from a query that matches no
 known agent (see Output and exit codes).
@@ -791,6 +800,22 @@ Behaviour:
   prints that model (use `--json` or `--fields canonical_id` to script the canonical
   id, shown only when the model has a real models.dev agnostic id); multiple matches
   list the candidates.
+- `providers [filter]` lists the models.dev providers agentdex can enrich against,
+  so the ids usable with `--provider` are discoverable from agentdex itself. It
+  loads no agent catalog and takes no agent argument. Columns are ID, NAME, ENV, and
+  MODELS: ENV lists each provider's API-key variable names, sorted, a set variable
+  suffixed `(set)` and an unset one left bare, so a bare name means unset — a
+  deliberately terser divergence from the symmetric `(set)/(unset)` markers `get`
+  shows, chosen to keep the wide listing legible. MODELS is the provider's model
+  count over the array carried in the structured `models` field, which stays
+  array-typed like `list` and `get` so `.data[].models` reads uniformly. Env-var
+  presence is read at the boundary through `os.LookupEnv` and also exposed as the
+  structured `present` map (variable to boolean) so scripts read presence without
+  parsing the `(set)` suffix. The optional filter narrows by case-insensitive
+  substring over id and name and is a browse narrowing, not a selector (see Selector
+  matching): several matches list all, no match is an empty listing at exit 0. A
+  models.dev outage with no cache leaves no result and is transient (exit 75); gross
+  models.dev structural drift is a data fault (exit 78), never transient.
 - `refresh` forces a cache refresh for the catalog, models.dev, or both.
 - `skills <agent> [name]` is read-only discovery. With no name it lists SKILL.md
   entries in the agent's resolved skills directory. With a name it applies selector
@@ -1075,7 +1100,9 @@ start and library project files) rather than landing everything in one change.
   the hot path. start verifies it (and default_model) against agentdex at install
   and via start doctor. Config and skills paths leave start/library entirely.
 - CLI selector matching is one rule (none/one/many) applied to `<agent>`, model
-  `[query]`, and skill `[name]`.
+  `[query]`, and skill `[name]`. The `providers [filter]` positional is exempt: it
+  is a browse narrowing, so a filter matching none is an empty listing at exit 0,
+  not a not-found at exit 3.
 - Catalog and models.dev are cross-referenced to drive get exit codes, evaluated per
   provider: all providers present 0, some present 0 with a warning naming the absent
   provider(s), every provider absent 78 (catalog data error), not a catalog agent but

@@ -75,6 +75,7 @@ func NewRootCommand() *cobra.Command {
 		a.newListCmd(),
 		a.newGetCmd(),
 		a.newModelsCmd(),
+		a.newProvidersCmd(),
 		a.newRefreshCmd(),
 		a.newVersionCmd(),
 	)
