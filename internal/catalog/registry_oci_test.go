@@ -100,8 +100,8 @@ func TestProductionRegistryAgainstLocalOCI(t *testing.T) {
 
 func assertFixtureAgents(t *testing.T, cat *catalog.Catalog) {
 	t.Helper()
-	if len(cat.Agents) != 3 {
-		t.Errorf("got %d agents, want 3", len(cat.Agents))
+	if len(cat.Agents) != 4 {
+		t.Errorf("got %d agents, want 4", len(cat.Agents))
 	}
 	for id, a := range cat.Agents {
 		if a.ID != id {

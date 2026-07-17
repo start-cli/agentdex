@@ -3,6 +3,8 @@ package catalog_test
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -59,13 +61,13 @@ func TestLoadValidFixture(t *testing.T) {
 			t.Errorf("agent %q has ID %q; ID must equal its map key", id, a.ID)
 		}
 	}
-	for _, want := range []string{"alpha-cli", "beta-tool", "gamma-agent"} {
+	for _, want := range []string{"alpha-cli", "beta-tool", "gamma-agent", "delta-agent"} {
 		if _, ok := got[want]; !ok {
 			t.Errorf("missing agent %q in %v", want, keys(got))
 		}
 	}
-	if len(got) != 3 {
-		t.Errorf("got %d agents, want 3", len(got))
+	if len(got) != 4 {
+		t.Errorf("got %d agents, want 4", len(got))
 	}
 
 	// Spot-check optional-field decoding across entries.
@@ -80,6 +82,12 @@ func TestLoadValidFixture(t *testing.T) {
 	}
 	if want := []string{"google", "openai"}; !equal(got["gamma-agent"].Provider, want) {
 		t.Errorf("gamma-agent providers = %v, want %v", got["gamma-agent"].Provider, want)
+	}
+	if !got["delta-agent"].Agnostic {
+		t.Error("delta-agent should be agnostic")
+	}
+	if len(got["delta-agent"].Provider) != 0 {
+		t.Errorf("delta-agent provider = %v, want empty", got["delta-agent"].Provider)
 	}
 }
 
@@ -100,6 +108,78 @@ func TestLoadSchemaViolationFails(t *testing.T) {
 	}
 	if res != nil {
 		t.Errorf("expected no partial catalog, got %+v", res)
+	}
+}
+
+func TestLoadAgnosticProviderInvariantFailsBothDirections(t *testing.T) {
+	// The provider invariant is conditional on agnostic: an agnostic entry must
+	// not declare provider (the closed definition rejects the field) and a
+	// home-provider entry must declare it. Both directions are validated by real
+	// CUE evaluation through the loader, against the schema the fixture bundles.
+	valid := catalogtest.FixtureDir(t, "catalog-valid")
+
+	cases := []struct {
+		name   string
+		agents string
+	}{
+		{"agnostic entry declaring provider", `package catalog
+
+agents: "bad-agent": {
+	name: "Bad Agent"
+	bin:  "bad"
+	config: global: "~/.bad"
+	agnostic: true
+	provider: ["anthropic"]
+}
+`},
+		{"home-provider entry omitting provider", `package catalog
+
+agents: "bad-agent": {
+	name: "Bad Agent"
+	bin:  "bad"
+	config: global: "~/.bad"
+}
+`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dir := t.TempDir()
+			copyModuleFile(t, valid, dir, "cue.mod/module.cue")
+			copyModuleFile(t, valid, dir, "schema.cue")
+			writeModuleFile(t, dir, "agents.cue", tc.agents)
+
+			loader := catalog.New(catalogtest.Serve("v1.0.0", dir),
+				catalog.WithModulePath(mainPath),
+				catalog.WithCacheDir(t.TempDir()),
+			)
+			res, err := loader.Load(context.Background())
+			if err == nil {
+				t.Fatalf("Load succeeded on invariant-violating entry; got %+v", res)
+			}
+			if !errors.Is(err, catalog.ErrInvalidCatalog) {
+				t.Errorf("error = %v, want ErrInvalidCatalog", err)
+			}
+		})
+	}
+}
+
+func copyModuleFile(t *testing.T, srcDir, dstDir, rel string) {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(srcDir, filepath.FromSlash(rel)))
+	if err != nil {
+		t.Fatalf("read %s: %v", rel, err)
+	}
+	writeModuleFile(t, dstDir, rel, string(data))
+}
+
+func writeModuleFile(t *testing.T, dir, rel, body string) {
+	t.Helper()
+	path := filepath.Join(dir, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatalf("mkdir for %s: %v", rel, err)
+	}
+	if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
+		t.Fatalf("write %s: %v", rel, err)
 	}
 }
 

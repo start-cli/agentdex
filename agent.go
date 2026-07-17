@@ -40,6 +40,9 @@ type Catalog struct {
 
 // KnownAgent is one catalog entry: the static facts about an agent. The ID is
 // populated from the catalog map key by the loader; #KnownAgent has no id field.
+// Agnostic agents have no home provider: Provider is empty and callers supply
+// the enrichment set via WithProviders. Home-provider agents always list at
+// least one models.dev provider id.
 type KnownAgent struct {
 	ID          string
 	Name        string
@@ -48,6 +51,7 @@ type KnownAgent struct {
 	Config      PathPair
 	Skills      *PathPair     // nil if the agent has no skills concept
 	Version     *VersionProbe // nil if version is not resolvable
+	Agnostic    bool
 	Provider    []string
 	Homepage    string
 }

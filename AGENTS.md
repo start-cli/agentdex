@@ -50,7 +50,11 @@ agent, not from memory:
 - `version.args` and optional `version.pattern`: the flag that prints the version
   and a regex to extract it.
 - `provider`: one or more real models.dev provider ids. This is the join key to
-  models.dev enrichment; a wrong id silently drops model data.
+  models.dev enrichment; a wrong id silently drops model data. An agent that can
+  drive any models.dev provider (e.g. opencode) is provider-agnostic: set
+  `agnostic: true` and omit `provider` entirely — the schema rejects an entry
+  that has both. Callers supply the enrichment set at query time via
+  `--provider`; never infer it from the agent's internal configuration.
 
 When an agent supports the shared `.agents/` and `~/.agents/` convention, prefer
 those paths over the agent's native equivalents for the slot that maps to them
@@ -63,26 +67,28 @@ mapping for that slot (usually `config`).
 Add a block alongside the existing agents in `catalog/agents.cue`:
 
 ```cue
-agents: "opencode": {
-	name:        "OpenCode"
-	bin:         "opencode"
-	description: "..."
+agents: "claude-code": {
+	name:        "Claude Code"
+	bin:         "claude"
+	description: "Anthropic's agentic coding tool that runs in the terminal."
 	config: {
-		global: "~/.config/opencode"
-		local:  ".opencode"
+		global: "~/.claude"
+		local:  ".claude"
 	}
 	skills: {
-		global: "~/.config/opencode/skills"
-		local:  ".opencode/skills"
+		global: "~/.claude/skills"
+		local:  ".claude/skills"
 	}
 	version: {
 		args:    ["--version"]
 		pattern: "([0-9]+\\.[0-9]+\\.[0-9]+)"
 	}
-	provider: ["anthropic", "openai"]
-	homepage: "https://..."
+	provider: ["anthropic"]
+	homepage: "https://github.com/anthropics/claude-code"
 }
 ```
+
+An agnostic entry (e.g. opencode) sets `agnostic: true` and omits `provider`.
 
 Fields, per `catalog/schema.cue`:
 
@@ -91,7 +97,8 @@ Fields, per `catalog/schema.cue`:
 | `name` | yes | Human display name, non-empty |
 | `bin` | yes | Executable resolved on PATH, non-empty |
 | `config.global` | yes | Global config directory |
-| `provider` | yes | One or more models.dev provider ids; the join key |
+| `provider` | unless agnostic | One or more models.dev provider ids; the join key; forbidden when `agnostic` is true |
+| `agnostic` | no | Defaults false; true marks a provider-agnostic agent with no home provider |
 | `description` | no | One sentence |
 | `config.local` | no | Project-local config directory |
 | `skills.global` | with `skills` | Required when `skills` is present |

@@ -131,7 +131,7 @@ func TestListAllIncludesMissingAgents(t *testing.T) {
 	if all.code != codeOK {
 		t.Fatalf("list --all exit = %d, stderr=%q", all.code, all.stderr)
 	}
-	for _, want := range []string{"alpha-cli", "beta-tool", "gamma-agent", "missing"} {
+	for _, want := range []string{"alpha-cli", "beta-tool", "gamma-agent", "delta-agent", "missing"} {
 		if !strings.Contains(all.stdout, want) {
 			t.Errorf("list --all missing %q:\n%s", want, all.stdout)
 		}
@@ -146,8 +146,8 @@ func TestListAllIncludesMissingAgents(t *testing.T) {
 		t.Fatalf("list --all --json exit = %d, stderr=%q", got.code, got.stderr)
 	}
 	rows := got.envelope(t).Data.([]any)
-	if len(rows) != 3 {
-		t.Fatalf("list --all rows = %d, want 3", len(rows))
+	if len(rows) != 4 {
+		t.Fatalf("list --all rows = %d, want 4", len(rows))
 	}
 	byID := map[string]map[string]any{}
 	for _, r := range rows {
@@ -162,6 +162,15 @@ func TestListAllIncludesMissingAgents(t *testing.T) {
 	}
 	if bin := byID["alpha-cli"]["bin"]; bin != "" {
 		t.Errorf("missing agent bin = %v, want blank", bin)
+	}
+	// delta-agent is provider-agnostic and no --provider was given: it lists (never
+	// fails the command) with models not-applicable (JSON null), distinct from a
+	// home-provider agent's degraded empty list.
+	if _, ok := byID["delta-agent"]; !ok {
+		t.Fatalf("list --all omitted delta-agent:\n%s", got.stdout)
+	}
+	if models := byID["delta-agent"]["models"]; models != nil {
+		t.Errorf("agnostic delta-agent models = %v, want null", models)
 	}
 }
 

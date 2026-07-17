@@ -39,6 +39,7 @@ func fromInternalCatalog(ic *catalog.Catalog) *Catalog {
 			Bin:         a.Bin,
 			Description: a.Description,
 			Config:      PathPair(a.Config),
+			Agnostic:    a.Agnostic,
 			Provider:    a.Provider,
 			Homepage:    a.Homepage,
 		}

@@ -13,16 +13,20 @@ import (
 )
 
 func (a *app) newListCmd() *cobra.Command {
-	var all bool
-	var fields []string
+	var (
+		all       bool
+		fields    []string
+		providers []string
+	)
 	cmd := &cobra.Command{
 		Use:     "list",
 		GroupID: groupCore,
 		Short:   "List detected agents",
 		Long: "List the AI coding agents detected on this machine. Each agent's model count " +
 			"is enriched from models.dev, served from the local cache when warm and degrading " +
-			"to zero when models.dev cannot be reached. --all adds the catalogued agents whose " +
-			"binary was not found, with \"missing\" in the BIN column.",
+			"to zero when models.dev cannot be reached. Provider-agnostic agents show \"-\" " +
+			"unless --provider is given. --all adds the catalogued agents whose binary was " +
+			"not found, with \"missing\" in the BIN column.",
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			cfg, err := a.requireConfig()
@@ -43,7 +47,11 @@ func (a *app) newListCmd() *cobra.Command {
 				warnings = append(warnings, "agent catalog is stale: re-resolution failed, using the last resolved version")
 			}
 
+			callerProviders := flattenProviders(providers)
 			base := append(cfg.LibraryOptions(flags), agentdex.WithCatalog(cat))
+			if len(callerProviders) > 0 {
+				base = append(base, agentdex.WithProviders(callerProviders...))
+			}
 			if all {
 				base = append(base, agentdex.IncludeMissing())
 			}
@@ -58,6 +66,15 @@ func (a *app) newListCmd() *cobra.Command {
 			// that branch (Catalog does not surface per-provider drift). The defensive
 			// copy keeps base intact for the schema-drift fallback.
 			client := cfg.ModelsClient()
+			// Validate caller-supplied provider ids at the boundary so an unknown id
+			// is a usage fault regardless of whether an agnostic agent is installed to
+			// enrich against it. Schema drift and unreachability defer to the
+			// enrichment path's existing tolerance below.
+			if len(callerProviders) > 0 {
+				if verr := agentdex.ValidateCallerProviders(cmd.Context(), client, callerProviders); errors.Is(verr, agentdex.ErrUnknownProvider) {
+					return a.fail(cmd, codeFor(verr), verr, warnings...)
+				}
+			}
 			opts := append(append([]agentdex.Option(nil), base...), agentdex.WithModels(client, agentdex.EnrichModels()))
 			if _, cerr := client.Catalog(cmd.Context()); cerr != nil && !errors.Is(cerr, modelsdev.ErrModelsSchema) {
 				warnings = append(warnings, "model counts unavailable: models.dev is unreachable and not cached")
@@ -73,6 +90,8 @@ func (a *app) newListCmd() *cobra.Command {
 				agents, err = agentdex.Detect(cmd.Context(), base...)
 			}
 			if err != nil {
+				// Unknown caller providers are usage faults; list otherwise soft-skips
+				// agnostic agents without providers so a mixed catalog never fails.
 				return a.fail(cmd, codeFor(err), err)
 			}
 			a.log.Debug("list detected agents", "count", len(agents), "all", all)
@@ -84,7 +103,13 @@ func (a *app) newListCmd() *cobra.Command {
 			recs := make([]*record, len(agents))
 			for i := range agents {
 				r := agentRecord(&agents[i])
-				withModels(r, agents[i].Models)
+				ka, ok := cat.Agents[agents[i].ID]
+				if ok && ka.Agnostic && len(callerProviders) == 0 {
+					// Not applicable: JSON null / text "-", not the degrade [] / 0 shape.
+					withModelsNA(r)
+				} else {
+					withModels(r, agents[i].Models)
+				}
 				recs[i] = r
 			}
 
@@ -115,6 +140,7 @@ func (a *app) newListCmd() *cobra.Command {
 		},
 	}
 	cmd.Flags().BoolVar(&all, "all", false, "Include catalogued agents that were not detected")
+	cmd.Flags().StringSliceVar(&providers, "provider", nil, "models.dev provider ids for agnostic agents' model counts (repeatable or csv)")
 	registerFieldsFlag(cmd, &fields)
 	addFieldsHelpSection(cmd, agentFieldSet)
 	return cmd

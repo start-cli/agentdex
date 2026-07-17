@@ -63,6 +63,8 @@ func codeFor(err error) int {
 		// A reachable models.dev serving a malformed model is a data fault, not a
 		// transient outage: report it as config, never as transient.
 		return codeConfig
+	case errors.Is(err, agentdex.ErrProvidersRequired), errors.Is(err, agentdex.ErrUnknownProvider):
+		return codeUsage
 	case errors.Is(err, agentdex.ErrCatalogUnavailable):
 		return codeTransient
 	case errors.Is(err, agentdex.ErrAgentUnknown):

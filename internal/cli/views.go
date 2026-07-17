@@ -30,6 +30,16 @@ var agentVerboseFields = []string{"id", "name", "version", "config_dir", "provid
 // are absent (no local config, no skills concept, no enrichment) are simply not
 // added; they remain valid to select per agentFieldSet and resolve to a blank.
 func agentRecord(a *agentdex.Agent) *record {
+	return buildAgentRecord(a, true)
+}
+
+// agentRecordWithoutProviders is the agnostic soft-path record: outside facts
+// only, omitting the providers field (and never adding provider_env / models).
+func agentRecordWithoutProviders(a *agentdex.Agent) *record {
+	return buildAgentRecord(a, false)
+}
+
+func buildAgentRecord(a *agentdex.Agent, includeProviders bool) *record {
 	r := newRecord(agentFieldSet)
 	r.add("id", a.ID, a.ID)
 	r.add("name", a.Name, a.Name)
@@ -51,9 +61,17 @@ func agentRecord(a *agentdex.Agent) *record {
 	if a.Skills.Global != "" {
 		r.add("skills_dir", a.Skills.Global, a.Skills.Global)
 	}
-	r.add("providers", a.Providers, strings.Join(a.Providers, ", "))
+	if includeProviders {
+		r.add("providers", a.Providers, strings.Join(a.Providers, ", "))
+	}
 	r.add("homepage", a.Homepage, orDash(a.Homepage))
 	return r
+}
+
+// withModelsNA marks models as not applicable (agnostic agent without --provider):
+// JSON null and text "-", distinct from withModels's nil→[] degrade shape.
+func withModelsNA(r *record) {
+	r.add("models", nil, "-")
 }
 
 // withProviderEnv adds the provider-env field to an agent record. Provider-env is

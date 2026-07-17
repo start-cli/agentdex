@@ -15,13 +15,17 @@ import (
 )
 
 func (a *app) newModelsCmd() *cobra.Command {
-	var fields []string
+	var (
+		fields    []string
+		providers []string
+	)
 	cmd := &cobra.Command{
 		Use:     "models <agent> [query]",
 		GroupID: groupCore,
 		Short:   "List the models available to an agent",
 		Long: "List the provider models available to an agent, with pricing, limits, and " +
-			"capabilities. With a query, fuzzy-match a single model; an ambiguous query lists candidates.",
+			"capabilities. With a query, fuzzy-match a single model; an ambiguous query lists candidates. " +
+			"Provider-agnostic agents require --provider with one or more models.dev provider ids.",
 		// MaximumNArgs, not RangeArgs(1, 2): the missing-agent case is handled in
 		// RunE so it reports through the shared usage path — a helpful message that
 		// carries the JSON envelope — rather than cobra's terse arg-count error.
@@ -53,22 +57,41 @@ func (a *app) newModelsCmd() *cobra.Command {
 			}
 			a.log.Debug("models resolved agent", "id", id)
 
-			client := cfg.ModelsClient()
-			if len(args) == 2 {
-				return a.modelsOne(cmd, cat, id, args[1], client, fields, warnings)
+			ka := cat.Agents[id]
+			callerProviders := flattenProviders(providers)
+			if !ka.Agnostic && len(callerProviders) > 0 {
+				return a.fail(cmd, codeUsage, fmt.Errorf("agent %q has catalog providers; --provider is only valid for provider-agnostic agents", id), warnings...)
 			}
-			return a.modelsList(cmd, cat.Agents[id].Provider, client, fields, warnings)
+			providerSet := ka.Provider
+			if ka.Agnostic {
+				if len(callerProviders) == 0 {
+					return a.fail(cmd, codeUsage, fmt.Errorf("%w: %q is provider-agnostic; supply --provider with models.dev provider ids", agentdex.ErrProvidersRequired, id), warnings...)
+				}
+				providerSet = callerProviders
+			}
+
+			client := cfg.ModelsClient()
+			if ka.Agnostic {
+				if err := agentdex.ValidateCallerProviders(cmd.Context(), client, providerSet); err != nil {
+					return a.fail(cmd, modelsCode(err), err, warnings...)
+				}
+			}
+			if len(args) == 2 {
+				return a.modelsOne(cmd, cat, id, args[1], client, providerSet, fields, warnings)
+			}
+			return a.modelsList(cmd, providerSet, client, fields, warnings)
 		},
 	}
 	registerFieldsFlag(cmd, &fields)
+	cmd.Flags().StringSliceVar(&providers, "provider", nil, "models.dev provider ids for agnostic agents (repeatable or csv)")
 	addFieldsHelpSection(cmd, modelFieldSet)
 	return cmd
 }
 
 // modelsOne resolves a single model query through the library and reports it,
 // exposing the canonical id when the model has a real models.dev agnostic entry.
-func (a *app) modelsOne(cmd *cobra.Command, cat *agentdex.Catalog, id, query string, client *modelsdev.Client, fields, warnings []string) error {
-	m, providerID, canonicalID, err := cat.ResolveModel(cmd.Context(), id, query, client)
+func (a *app) modelsOne(cmd *cobra.Command, cat *agentdex.Catalog, id, query string, client *modelsdev.Client, providers, fields, warnings []string) error {
+	m, providerID, canonicalID, err := cat.ResolveModel(cmd.Context(), id, query, client, providers)
 	if err != nil {
 		return a.fail(cmd, modelsCode(err), err, warnings...)
 	}
@@ -153,12 +176,15 @@ func (a *app) modelsList(cmd *cobra.Command, providers []string, client *modelsd
 }
 
 // modelsCode classifies a models-command failure. A no-match or ambiguous query
-// is not-found; recognisable schema drift is a data fault; anything else on this
-// model-centric command is a models.dev outage, hence transient.
+// is not-found; caller/usage faults (missing or unknown providers) are usage;
+// recognisable schema drift is a data fault; anything else on this model-centric
+// command is a models.dev outage, hence transient.
 func modelsCode(err error) int {
 	switch {
 	case errors.Is(err, agentdex.ErrModelNotFound), errors.Is(err, agentdex.ErrModelAmbiguous):
 		return codeNotFound
+	case errors.Is(err, agentdex.ErrProvidersRequired), errors.Is(err, agentdex.ErrUnknownProvider):
+		return codeUsage
 	case errors.Is(err, modelsdev.ErrModelsSchema):
 		return codeConfig
 	default:

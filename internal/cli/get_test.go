@@ -174,6 +174,51 @@ func TestGetNonePresentIsDataError(t *testing.T) {
 	}
 }
 
+// mustNotFetchModelsServer returns a models.dev URL whose any access fails the
+// test: proof that a code path is answered without touching models.dev.
+func mustNotFetchModelsServer(t *testing.T) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Errorf("models.dev was fetched; this path must stay offline")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+func TestGetNonModelsFieldsSkipModelsDevAndRollup(t *testing.T) {
+	// The second demand gate: a --fields selection that demands neither
+	// provider_env nor models is answered offline — no models.dev fetch, no
+	// coverage rollup, exit 0 even when every catalog provider would be absent
+	// (which an unfiltered get reports as exit 78).
+	newScenario(t, mustNotFetchModelsServer(t), "alpha-cli")
+
+	got := runCLI("--json", "get", "alpha-cli", "--fields", "skills_dir")
+	if got.code != codeOK {
+		t.Fatalf("get --fields skills_dir exit = %d, want 0; stderr=%q", got.code, got.stderr)
+	}
+	data := got.envelope(t).Data.(map[string]any)
+	if _, ok := data["skills_dir"]; !ok {
+		t.Errorf("expected skills_dir in selection: %v", data)
+	}
+}
+
+func TestGetFieldsProvidersIsOfflineCatalogData(t *testing.T) {
+	// providers alone is catalog data: filled with no models.dev fetch and no
+	// rollup, so absent-upstream providers cannot turn it into exit 78.
+	newScenario(t, mustNotFetchModelsServer(t), "alpha-cli")
+
+	got := runCLI("--json", "get", "alpha-cli", "--fields", "providers")
+	if got.code != codeOK {
+		t.Fatalf("get --fields providers exit = %d, want 0; stderr=%q", got.code, got.stderr)
+	}
+	data := got.envelope(t).Data.(map[string]any)
+	provs, ok := data["providers"].([]any)
+	if !ok || len(provs) != 1 || provs[0] != "anthropic" {
+		t.Errorf("providers = %v, want the catalog list [anthropic]", data["providers"])
+	}
+}
+
 func TestGetSchemaIsDataError(t *testing.T) {
 	srv := modelsServer(t, []string{"google"}, "anthropic")
 	newScenario(t, srv.URL, "alpha-cli")

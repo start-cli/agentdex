@@ -16,7 +16,10 @@ package catalog
 		args: [string, ...string]
 		pattern?: string
 	}
-	provider: [string, ...string]
+	agnostic: bool | *false
+	if !agnostic {
+		provider: [string, ...string]
+	}
 	homepage?: string
 }
 

@@ -165,7 +165,7 @@ type Agent struct {
     Version     string            // resolved version, "" if unknown or skipped
     Config      ResolvedPaths     // resolved global/local config dirs, existence per scope
     Skills      ResolvedPaths     // resolved global/local skills dirs; zero value if the agent has no skills concept
-    Providers   []string          // models.dev provider id(s)
+    Providers   []string          // models.dev provider id(s): catalog list, or caller-supplied (WithProviders) for agnostic agents
     ProviderEnv map[string]bool   // provider API-key env var -> present in env
     Models      []modelsdev.Model // enriched; nil unless EnrichModels() was passed to WithModels
     Homepage    string
@@ -179,6 +179,7 @@ type KnownAgent struct {
     Config   PathPair
     Skills   *PathPair      // nil if the agent has no skills concept
     Version  *VersionProbe  // nil if version is not resolvable
+    Agnostic bool           // no home provider; Provider is empty and callers supply the enrichment set
     Provider []string
     Homepage string
 }
@@ -236,18 +237,28 @@ func DetectOne(ctx context.Context, id string, opts ...Option) (*Agent, bool, er
 // WithCatalog.
 func LoadCatalog(ctx context.Context, opts ...Option) (cat *Catalog, stale bool, err error)
 
-// ResolveModel maps a fuzzy query (e.g. "sonnet") to a models.dev model for the
-// given agent's provider(s). It returns the matched provider Model, the real
+// ResolveModel maps a fuzzy query (e.g. "sonnet") to a models.dev model within
+// the given providers. providers is the search set: home-provider callers pass
+// the catalog provider list (empty falls back to it defensively); agnostic
+// callers pass the caller-supplied ids, and an empty list for an agnostic agent
+// is ErrProvidersRequired. It returns the matched provider Model, the real
 // models.dev provider id it resolved within, and the model's canonical
 // (provider-agnostic) id when the agnostic map carries an entry for it, or ""
 // when it does not. Model.ID keeps its source-id meaning; no id is ever constructed.
-func (c *Catalog) ResolveModel(ctx context.Context, agentID, query string, mc *modelsdev.Client) (m modelsdev.Model, providerID string, canonicalID string, err error)
+func (c *Catalog) ResolveModel(ctx context.Context, agentID, query string, mc *modelsdev.Client, providers []string) (m modelsdev.Model, providerID string, canonicalID string, err error)
+
+// ValidateCallerProviders checks caller-supplied provider ids against models.dev
+// when it is reachable, returning ErrUnknownProvider for the first unknown id and
+// nil when models.dev cannot be reached (the caller shares the degrade path).
+// Never applied to catalog provider lists on home-provider agents.
+func ValidateCallerProviders(ctx context.Context, mc *modelsdev.Client, ids []string) error
 ```
 
 Options:
 
 ```go
 func WithModels(c *modelsdev.Client, opts ...ModelsOption) Option // attach a models.dev client (enables ProviderEnv); pass EnrichModels() to also fill Agent.Models
+func WithProviders(ids ...string) Option    // models.dev provider ids for agnostic agents; home-provider agents ignore it
 func WithSkipVersion() Option               // do not exec any binary
 func WithSearchDirs(dirs ...string) Option  // extra binary search locations
 func WithBinPaths(m map[string]string) Option // per-agent binary path override, id -> path
@@ -269,6 +280,8 @@ var (
     ErrAgentUnknown       = errors.New("unknown agent id")
     ErrModelAmbiguous     = errors.New("model query matched multiple models")
     ErrModelNotFound      = errors.New("model query matched no models")
+    ErrProvidersRequired  = errors.New("providers required for agnostic agent")
+    ErrUnknownProvider    = errors.New("unknown provider id")
 )
 ```
 
@@ -298,7 +311,9 @@ For each KnownAgent:
    version to stderr. The bin name is never re-resolved through PATH, so the
    `--bin-path` override and search dirs apply here too. Failure is non-fatal: leave
    `Version` empty.
-5. Providers. Copy `Provider` ids from the catalog. This is offline: no filesystem
+5. Providers. Copy `Provider` ids from the catalog; for an agnostic agent, copy the
+   caller-supplied ids from `WithProviders` instead (home-provider agents ignore
+   that option — the catalog is authoritative). This is offline: no filesystem
    access and no network.
 6. Enrichment (models.dev). When a models.dev client is attached (`WithModels`),
    fetch the providers map and record each provider's API-key env var presence in
@@ -307,7 +322,13 @@ For each KnownAgent:
    when models.dev is unreachable with no cache, both are skipped and `Detect` still
    succeeds with `ProviderEnv` and `Models` nil. Provider-env needs only the small
    providers map, so it stays populated even when the per-model `Models` slice is
-   suppressed.
+   suppressed. Caller-supplied ids on an agnostic agent are first validated against
+   a reachable models.dev (`ErrUnknownProvider` on the first unknown id). An
+   agnostic agent with a client attached but no caller providers is a split:
+   `DetectOne` fails with `ErrProvidersRequired` so the missing set surfaces on a
+   targeted query; multi-agent `Detect` skips enrichment for that agent only
+   (Providers empty, ProviderEnv and Models nil) and continues, so a mixed catalog
+   always lists.
 
 The four core steps (presence, config, skills, version) use only the filesystem and
 the catalog and always work offline. Version resolution is the only step that executes
@@ -347,12 +368,25 @@ derives a model id from its path. The loader populates `KnownAgent.ID` and
         args: [string, ...string]   // appended to the detected binary, e.g. ["--version"]
         pattern?: string
     }
-    provider: [string, ...string]   // models.dev provider ids; the join key; at least one required
+    agnostic: bool | *false
+    if !agnostic {
+        provider: [string, ...string]   // models.dev provider ids; the join key; at least one required
+    }
     homepage?: string
 }
 
 agents: [=~"^[a-z0-9]+(-[a-z0-9]+)*$"]: #KnownAgent
 ```
+
+The provider invariant is conditional on `agnostic`. A home-provider agent
+(`agnostic` false, the default) requires at least one models.dev provider id — the
+join key to enrichment. An agnostic agent (`agnostic: true`, e.g. opencode, whose
+provider set is definitionally all of models.dev) has no home provider and must
+omit `provider`: the definition is closed, so an agnostic entry that declares
+`provider` fails validation, as does a home-provider entry that omits it. For
+agnostic agents the enrichment provider set comes from the caller at query time
+(`WithProviders` / `--provider`), never from the catalog and never inferred from
+the agent's internal configuration.
 
 Example entry:
 
@@ -572,8 +606,10 @@ requested it. This is a coarse guard against gross drift, not a full schema chec
 
 ### Model resolution
 
-`Catalog.ResolveModel(ctx, agentID, query, mc)` resolves a fuzzy query against the
-agent's provider model set, in this order:
+`Catalog.ResolveModel(ctx, agentID, query, mc, providers)` resolves a fuzzy query
+against the given provider search set — the catalog list for home-provider agents
+(an empty list falls back to it), the caller-supplied ids for agnostic agents
+(an empty list is `ErrProvidersRequired`) — in this order:
 
 1. exact models.dev id
 2. exact name, case-insensitive
@@ -607,12 +643,14 @@ of whether the agent is actually usable. Sourced entirely from the models.dev
 providers map; nothing added to the catalog. It is enrichment, not core detection:
 it requires a models.dev client (attached via `WithModels`) and is left nil when none
 is attached or models.dev is unreachable, never failing `Detect`. It needs only the
-small providers map, so `get` attaches the client by default for catalog agents
-(provider-env without requiring Models fill) and passes `EnrichModels()` only when
-Models is demanded (`--models` or a `--fields` selection that includes `models`);
-`list` attaches the client and enriches model counts unconditionally, served from
-the warm models.dev cache with no network and degrading to a zero count (with a
-warning) when models.dev is unreachable.
+small providers map, so `get` attaches the client whenever the requested output
+demands `provider_env` or `models` (unfiltered get demands provider-env) and passes
+`EnrichModels()` only when Models is demanded (`--models` or a `--fields` selection
+that includes `models`); a `--fields` selection that demands neither is answered
+offline, with no models.dev fetch and no coverage rollup. `list` attaches the
+client and enriches model counts unconditionally, served from the warm models.dev
+cache with no network and degrading to a zero count (with a warning) when
+models.dev is unreachable.
 
 ## Catalog and models.dev coverage
 
@@ -622,9 +660,13 @@ lists. Cross-referencing a queried agent against both drives `get` reporting,
 catalog validation, and start doctor.
 
 The models.dev axis is evaluated per provider, because `provider` is a list and an
-agent (aichat, for example) can serve several providers. Each of an agent's
-providers is independently either present in a reachable models.dev or absent. The
-agent-level outcome is a rollup of those per-provider verdicts:
+agent (aichat, for example) can serve several providers. The rollup applies to
+home-provider agents only: an agnostic agent has no catalog provider list, so a
+missing or unknown caller-supplied set is a usage fault (exit 2 via
+`ErrProvidersRequired` / `ErrUnknownProvider`), never a catalog data error. Each
+of a home-provider agent's providers is independently either present in a
+reachable models.dev or absent. The agent-level outcome is a rollup of those
+per-provider verdicts:
 
 | catalog | providers in models.dev | meaning | result |
 | --- | --- | --- | --- |
@@ -701,7 +743,11 @@ Behaviour:
   the listing, `list` re-detects without it and warns rather than exiting: the
   drift stays loud (a warning, not a silent blank) without killing the command.
   This is the deliberate exception to the schema-drift-is-fatal rule that `get` and
-  `models` follow, where models are central. `--all` additionally lists catalogued agents whose
+  `models` follow, where models are central. An agnostic agent's count is
+  not-applicable without `--provider`: the MODELS cell reads `-` and JSON carries
+  `models: null`, distinct from the `[]`/`0` degrade shape; with `--provider` the
+  caller-supplied set is enriched like a home-provider count (an unknown id is a
+  usage error, exit 2). `--all` additionally lists catalogued agents whose
   binary was not found: detected agents first, then the missing tail by id, with
   `missing` in the BIN column and `-` in VERSION (the library's IncludeMissing
   option; in JSON these rows carry `found: false` with a blank bin). The BIN column
@@ -718,9 +764,30 @@ Behaviour:
   Models and provider-env sections, emits a warning that model enrichment was
   unavailable, and exits 0. Enrichment is not the point of get, so its absence does
   not fail the command. Provider fallthrough (query matches no catalog agent but a
-  models.dev provider) includes the model list only with `--models`.
+  models.dev provider) includes the model list only with `--models`; `--provider`
+  is rejected as a usage error there, since no catalogued agent exists to apply it
+  to.
+- `get` and `models` accept `--provider` (repeatable or csv models.dev ids) to
+  supply the enrichment set for an agnostic agent; on a home-provider agent
+  `--provider` is rejected as a usage error (the catalog is authoritative), while
+  `list` accepts it and applies it only to agnostic rows. An unfiltered
+  `get <agnostic>` without `--provider` and without `--models` takes the soft path:
+  outside facts only, the `providers`, `provider_env`, and `models` fields omitted,
+  a warning naming the agent as provider-agnostic and how to enrich, exit 0 when
+  found (the usual exit 3 with the same payload when not installed). Any demand on
+  those fields (`--models`, or `--fields` naming one) without `--provider` is
+  `ErrProvidersRequired`, exit 2; an id that is not a models.dev provider is
+  `ErrUnknownProvider`, exit 2. With `--provider`, a selection naming any of those
+  fields validates the ids against a reachable models.dev — `providers` on an
+  agnostic agent is caller input, not catalog truth — while a selection naming
+  none of them stays offline. Two paths echo the caller ids without validation:
+  a not-installed agent (exit 3; no client is attached until the agent is found)
+  and the unreachable-and-uncached degrade (exit 0 with the outage warning), where
+  validation shares the degrade rather than failing. Agnostic gets never enter
+  the coverage rollup.
 - `models <agent> [query]` lists the agent's provider models with pricing, limits,
-  and capabilities. With a `query` it applies selector matching: a single match
+  and capabilities; an agnostic agent requires `--provider`, validated before
+  listing or resolving. With a `query` it applies selector matching: a single match
   prints that model (use `--json` or `--fields canonical_id` to script the canonical
   id, shown only when the model has a real models.dev agnostic id); multiple matches
   list the candidates.

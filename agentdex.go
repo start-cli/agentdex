@@ -27,17 +27,18 @@ type ModelsOption func(*modelsConfig)
 // User config and flags map entirely through options, so the engine keeps no
 // direct dependency on internal/catalog beyond loader construction.
 type config struct {
-	preloaded      *Catalog
-	catalogModule  string
-	catalogTTL     time.Duration
-	catalogTTLSet  bool
-	cacheDir       string
-	skipVersion    bool
-	includeMissing bool
-	searchDirs     []string
-	binPaths       map[string]string
-	disabled       map[string]struct{}
-	models         *modelsConfig
+	preloaded       *Catalog
+	catalogModule   string
+	catalogTTL      time.Duration
+	catalogTTLSet   bool
+	cacheDir        string
+	skipVersion     bool
+	includeMissing  bool
+	searchDirs      []string
+	binPaths        map[string]string
+	disabled        map[string]struct{}
+	models          *modelsConfig
+	callerProviders []string
 }
 
 // modelsConfig holds the attached models.dev client and whether per-model
@@ -80,6 +81,35 @@ func WithModels(c *modelsdev.Client, opts ...ModelsOption) Option {
 // provider-env reporting only.
 func EnrichModels() ModelsOption {
 	return func(mc *modelsConfig) { mc.enrich = true }
+}
+
+// WithProviders supplies models.dev provider ids for provider-agnostic agents.
+// Home-provider agents ignore the list and use their catalog providers. An empty
+// call is a no-op; duplicate ids are dropped. Combined with WithModels on
+// DetectOne, missing providers for an agnostic agent yield ErrProvidersRequired;
+// multi-agent Detect soft-skips enrichment for that agent instead.
+func WithProviders(ids ...string) Option {
+	return func(cfg *config) {
+		if len(ids) == 0 {
+			return
+		}
+		cfg.callerProviders = dedupeIDs(ids)
+	}
+}
+
+// dedupeIDs drops duplicate ids preserving first-seen order, so a repeated
+// caller-supplied provider cannot double model candidates downstream.
+func dedupeIDs(ids []string) []string {
+	out := make([]string, 0, len(ids))
+	seen := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	return out
 }
 
 // WithSkipVersion runs detection fully exec-free: no binary is executed and
@@ -179,7 +209,7 @@ func DetectOne(ctx context.Context, id string, opts ...Option) (*Agent, bool, er
 	if !ok {
 		return nil, false, ErrAgentUnknown
 	}
-	a, err := detectAgent(ctx, id, ka, cfg, newEnv(), false)
+	a, err := detectAgent(ctx, id, ka, cfg, newEnv(), detectMode{single: true})
 	if err != nil {
 		return nil, false, err
 	}

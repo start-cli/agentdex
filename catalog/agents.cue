@@ -39,3 +39,23 @@ agents: "claude-code": {
 	provider: ["anthropic"]
 	homepage: "https://github.com/anthropics/claude-code"
 }
+
+agents: "opencode": {
+	name:        "opencode"
+	bin:         "opencode"
+	description: "Open-source, provider-agnostic AI coding agent for the terminal."
+	config: {
+		global: "~/.config/opencode"
+		local:  ".opencode"
+	}
+	skills: {
+		global: "~/.agents/skills"
+		local:  ".agents/skills"
+	}
+	version: {
+		args:    ["--version"]
+		pattern: "([0-9]+\\.[0-9]+\\.[0-9]+)"
+	}
+	agnostic: true
+	homepage: "https://opencode.ai"
+}

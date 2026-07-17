@@ -18,3 +18,15 @@ var ErrModelAmbiguous = errors.New("model query matched multiple models")
 // ErrModelNotFound is returned by ResolveModel when a fuzzy query matches no
 // model in the agent's provider set.
 var ErrModelNotFound = errors.New("model query matched no models")
+
+// ErrProvidersRequired is returned when provider-related enrichment is demanded
+// for a provider-agnostic agent and no caller providers were supplied. DetectOne
+// returns it when a models.dev client is attached without WithProviders;
+// ResolveModel returns it for an empty providers argument on an agnostic agent.
+// Multi-agent Detect soft-skips enrichment instead of failing.
+var ErrProvidersRequired = errors.New("providers required for agnostic agent")
+
+// ErrUnknownProvider is returned when a caller-supplied provider id is not a
+// models.dev provider. Catalog provider lists on home-provider agents are not
+// validated this way; absent catalog providers remain a coverage fact.
+var ErrUnknownProvider = errors.New("unknown provider id")

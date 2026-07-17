@@ -10,11 +10,18 @@ import (
 	"github.com/start-cli/agentdex/modelsdev"
 )
 
-// ResolveModel maps a fuzzy query (e.g. "sonnet") to a models.dev model for the
-// given agent's provider(s), applying the shared none/one/many rule: exact
-// models.dev id, then exact name (case-insensitive), then a unique substring or
-// prefix; ambiguity returns ErrModelAmbiguous with the candidate ids and no match
+// ResolveModel maps a fuzzy query (e.g. "sonnet") to a models.dev model within
+// the given providers, applying the shared none/one/many rule: exact models.dev
+// id, then exact name (case-insensitive), then a unique substring or prefix;
+// ambiguity returns ErrModelAmbiguous with the candidate ids and no match
 // returns ErrModelNotFound. An id absent from the catalog returns ErrAgentUnknown.
+//
+// providers is the search set. Home-provider callers pass the catalog provider
+// list; agnostic callers pass the caller-supplied ids. An empty providers list
+// for an agnostic agent is ErrProvidersRequired; for a home-provider agent an
+// empty list falls back to the catalog provider list. Absent providers are
+// skipped silently; callers that need unknown-id rejection should call
+// ValidateCallerProviders first on caller-supplied sets.
 //
 // It returns the matched provider Model, the real models.dev provider id it
 // resolved within, and the model's canonical (provider-agnostic) id. The
@@ -29,7 +36,7 @@ import (
 // mc must be non-nil: unlike WithModels, where a nil client means "attach
 // nothing", ResolveModel needs a client to do anything, so passing nil is a
 // programmer error and panics.
-func (c *Catalog) ResolveModel(ctx context.Context, agentID, query string, mc *modelsdev.Client) (m modelsdev.Model, providerID string, canonicalID string, err error) {
+func (c *Catalog) ResolveModel(ctx context.Context, agentID, query string, mc *modelsdev.Client, providers []string) (m modelsdev.Model, providerID string, canonicalID string, err error) {
 	if mc == nil {
 		panic("agentdex: ResolveModel requires a non-nil *modelsdev.Client")
 	}
@@ -37,6 +44,16 @@ func (c *Catalog) ResolveModel(ctx context.Context, agentID, query string, mc *m
 	if !ok {
 		return modelsdev.Model{}, "", "", ErrAgentUnknown
 	}
+	search := providers
+	if len(search) == 0 {
+		if ka.Agnostic {
+			return modelsdev.Model{}, "", "", fmt.Errorf("%w: %q is provider-agnostic; supply providers (e.g. --provider)", ErrProvidersRequired, agentID)
+		}
+		search = ka.Provider
+	}
+	// A duplicated id would add every one of its models twice, turning a unique
+	// query into a spurious ErrModelAmbiguous.
+	search = dedupeIDs(search)
 
 	type candidate struct {
 		model      modelsdev.Model
@@ -47,7 +64,7 @@ func (c *Catalog) ResolveModel(ctx context.Context, agentID, query string, mc *m
 		cands []candidate
 		items []match.Item
 	)
-	for _, pid := range ka.Provider {
+	for _, pid := range search {
 		p, found, perr := mc.Provider(ctx, pid)
 		if perr != nil {
 			return modelsdev.Model{}, "", "", perr

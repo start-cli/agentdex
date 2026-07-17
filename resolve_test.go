@@ -32,7 +32,7 @@ func TestResolveModel(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			m, provider, canonical, err := cat.ResolveModel(context.Background(), "agent", tt.query, mc)
+			m, provider, canonical, err := cat.ResolveModel(context.Background(), "agent", tt.query, mc, nil)
 			if err != nil {
 				t.Fatalf("ResolveModel: %v", err)
 			}
@@ -81,7 +81,7 @@ func TestResolveModelAcrossProviders(t *testing.T) {
 
 	// A query that matches a model in the second provider resolves to that
 	// provider, confirming the resolver spans every provider the agent declares.
-	m, provider, canonical, err := cat.ResolveModel(context.Background(), "agent", "gpt", mc)
+	m, provider, canonical, err := cat.ResolveModel(context.Background(), "agent", "gpt", mc, nil)
 	if err != nil {
 		t.Fatalf("ResolveModel: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestResolveModelAcrossProviders(t *testing.T) {
 	}
 
 	// A model in the first provider still resolves correctly alongside the second.
-	m, provider, canonical, err = cat.ResolveModel(context.Background(), "agent", "opus", mc)
+	m, provider, canonical, err = cat.ResolveModel(context.Background(), "agent", "opus", mc, nil)
 	if err != nil {
 		t.Fatalf("ResolveModel: %v", err)
 	}
@@ -102,9 +102,62 @@ func TestResolveModelAcrossProviders(t *testing.T) {
 	}
 }
 
+func TestResolveModelAgnosticRequiresProviders(t *testing.T) {
+	mc := modelsClient(t, modelsCatalogJSON)
+	cat := &Catalog{Agents: map[string]KnownAgent{
+		"agent": {Name: "Agent", Bin: "absent", Config: PathPair{Global: "~/.a"}, Agnostic: true},
+	}}
+
+	_, _, _, err := cat.ResolveModel(context.Background(), "agent", "sonnet", mc, nil)
+	if !errors.Is(err, ErrProvidersRequired) {
+		t.Errorf("err = %v, want ErrProvidersRequired for an agnostic agent with no providers", err)
+	}
+}
+
+func TestResolveModelAgnosticWithCallerProviders(t *testing.T) {
+	// An agnostic agent resolves within exactly the caller-supplied set, not a
+	// catalog list it does not have.
+	mc := modelsClient(t, multiProviderModelsJSON)
+	cat := &Catalog{Agents: map[string]KnownAgent{
+		"agent": {Name: "Agent", Bin: "absent", Config: PathPair{Global: "~/.a"}, Agnostic: true},
+	}}
+
+	m, provider, canonical, err := cat.ResolveModel(context.Background(), "agent", "gpt", mc, []string{"openai"})
+	if err != nil {
+		t.Fatalf("ResolveModel: %v", err)
+	}
+	if m.ID != "gpt-5" || provider != "openai" || canonical != "" {
+		t.Errorf("got id=%q provider=%q canonical=%q, want gpt-5/openai/\"\"", m.ID, provider, canonical)
+	}
+
+	// A model outside the caller-supplied set does not match: the set bounds the
+	// search even though models.dev carries the model under another provider.
+	_, _, _, err = cat.ResolveModel(context.Background(), "agent", "opus", mc, []string{"openai"})
+	if !errors.Is(err, ErrModelNotFound) {
+		t.Errorf("err = %v, want ErrModelNotFound outside the caller-supplied set", err)
+	}
+}
+
+func TestResolveModelDeduplicatesProviders(t *testing.T) {
+	// A duplicated provider id must not double the candidate set: a unique query
+	// stays unique rather than failing ErrModelAmbiguous against itself.
+	mc := modelsClient(t, modelsCatalogJSON)
+	cat := &Catalog{Agents: map[string]KnownAgent{
+		"agent": {Name: "Agent", Bin: "absent", Config: PathPair{Global: "~/.a"}, Agnostic: true},
+	}}
+
+	m, provider, _, err := cat.ResolveModel(context.Background(), "agent", "sonnet", mc, []string{"anthropic", "anthropic"})
+	if err != nil {
+		t.Fatalf("ResolveModel: %v", err)
+	}
+	if m.ID != "claude-sonnet" || provider != "anthropic" {
+		t.Errorf("got id=%q provider=%q, want claude-sonnet/anthropic", m.ID, provider)
+	}
+}
+
 func TestResolveModelAmbiguous(t *testing.T) {
 	mc := modelsClient(t, modelsCatalogJSON)
-	_, _, _, err := resolveCatalog().ResolveModel(context.Background(), "agent", "claude", mc)
+	_, _, _, err := resolveCatalog().ResolveModel(context.Background(), "agent", "claude", mc, nil)
 	if !errors.Is(err, ErrModelAmbiguous) {
 		t.Errorf("err = %v, want ErrModelAmbiguous", err)
 	}
@@ -112,7 +165,7 @@ func TestResolveModelAmbiguous(t *testing.T) {
 
 func TestResolveModelNotFound(t *testing.T) {
 	mc := modelsClient(t, modelsCatalogJSON)
-	_, _, _, err := resolveCatalog().ResolveModel(context.Background(), "agent", "gemini", mc)
+	_, _, _, err := resolveCatalog().ResolveModel(context.Background(), "agent", "gemini", mc, nil)
 	if !errors.Is(err, ErrModelNotFound) {
 		t.Errorf("err = %v, want ErrModelNotFound", err)
 	}
@@ -120,7 +173,7 @@ func TestResolveModelNotFound(t *testing.T) {
 
 func TestResolveModelUnknownAgent(t *testing.T) {
 	mc := modelsClient(t, modelsCatalogJSON)
-	_, _, _, err := resolveCatalog().ResolveModel(context.Background(), "nope", "sonnet", mc)
+	_, _, _, err := resolveCatalog().ResolveModel(context.Background(), "nope", "sonnet", mc, nil)
 	if !errors.Is(err, ErrAgentUnknown) {
 		t.Errorf("err = %v, want ErrAgentUnknown", err)
 	}
@@ -128,7 +181,7 @@ func TestResolveModelUnknownAgent(t *testing.T) {
 
 func TestResolveModelSchemaDrift(t *testing.T) {
 	mc := modelsClient(t, malformedModelsJSON)
-	_, _, _, err := resolveCatalog().ResolveModel(context.Background(), "agent", "broken", mc)
+	_, _, _, err := resolveCatalog().ResolveModel(context.Background(), "agent", "broken", mc, nil)
 	if !errors.Is(err, modelsdev.ErrModelsSchema) {
 		t.Errorf("err = %v, want ErrModelsSchema", err)
 	}

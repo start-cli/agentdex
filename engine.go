@@ -2,6 +2,7 @@ package agentdex
 
 import (
 	"context"
+	"fmt"
 	"os"
 	"sort"
 	"sync"
@@ -76,7 +77,7 @@ func detectAll(ctx context.Context, cat *Catalog, cfg *config) ([]Agent, error) 
 			defer wg.Done()
 			sem <- struct{}{}
 			defer func() { <-sem }()
-			a, err := detectAgent(ctx, id, ka, cfg, env, !cfg.includeMissing)
+			a, err := detectAgent(ctx, id, ka, cfg, env, detectMode{omitIfMissing: !cfg.includeMissing})
 			mu.Lock()
 			defer mu.Unlock()
 			switch {
@@ -106,11 +107,24 @@ func detectAll(ctx context.Context, cat *Catalog, cfg *config) ([]Agent, error) 
 	return agents, nil
 }
 
-// detectAgent applies the data-driven engine steps to one catalog entry. With
-// omitIfMissing set (the Detect path) a not-found binary returns (nil, nil) so the
-// agent is dropped; without it (the DetectOne path) the agent is populated either
-// way. An error is returned only when enrichment hits non-degradable schema drift.
-func detectAgent(ctx context.Context, id string, ka KnownAgent, cfg *config, env pathEnv, omitIfMissing bool) (*Agent, error) {
+// detectMode carries the two orthogonal switches that shape one detection. Its
+// zero value is the multi-agent Detect default: populate every found agent, no
+// single-target semantics.
+type detectMode struct {
+	// omitIfMissing drops a not-found binary as (nil, nil): the multi-agent Detect
+	// path without IncludeMissing. Cleared, the agent is populated either way.
+	omitIfMissing bool
+	// single marks the DetectOne path. Only single distinguishes the
+	// provider-agnostic hard-fail from the multi-agent soft-skip, since
+	// IncludeMissing also clears omitIfMissing.
+	single bool
+}
+
+// detectAgent applies the data-driven engine steps to one catalog entry. The
+// mode selects drop-if-missing and single-target behaviour (see detectMode). An
+// error is returned only when enrichment hits non-degradable schema drift or a
+// single-target query lacks required providers.
+func detectAgent(ctx context.Context, id string, ka KnownAgent, cfg *config, env pathEnv, mode detectMode) (*Agent, error) {
 	// Honour cancellation before any work: presence and path resolution take no
 	// context, and the version probe treats cancellation as a non-fatal empty
 	// result, so without this check an offline or skip-version run would ignore
@@ -126,7 +140,7 @@ func detectAgent(ctx context.Context, id string, ka KnownAgent, cfg *config, env
 	}
 
 	a.BinaryPath, a.Found = locateBinary(id, ka, cfg)
-	if omitIfMissing && !a.Found {
+	if mode.omitIfMissing && !a.Found {
 		return nil, nil
 	}
 
@@ -134,13 +148,27 @@ func detectAgent(ctx context.Context, id string, ka KnownAgent, cfg *config, env
 	if ka.Skills != nil {
 		a.Skills = resolvePaths(*ka.Skills, env)
 	}
-	if len(ka.Provider) > 0 {
+	// Agnostic agents take the caller-supplied set; home-provider agents always
+	// use the catalog list and ignore WithProviders.
+	if ka.Agnostic {
+		if len(cfg.callerProviders) > 0 {
+			a.Providers = append([]string(nil), cfg.callerProviders...)
+		}
+	} else if len(ka.Provider) > 0 {
 		a.Providers = append([]string(nil), ka.Provider...)
 	}
 	if a.Found && ka.Version != nil && !cfg.skipVersion {
 		a.Version = probeVersion(ctx, a.BinaryPath, *ka.Version)
 	}
-	if err := enrich(ctx, a, cfg); err != nil {
+	if cfg.models != nil && ka.Agnostic && len(cfg.callerProviders) == 0 {
+		// A targeted DetectOne fails so the missing providers surface; multi-agent
+		// Detect soft-skips enrichment so a mixed catalog still lists.
+		if mode.single {
+			return nil, fmt.Errorf("%w: %q is provider-agnostic; supply providers (e.g. --provider)", ErrProvidersRequired, id)
+		}
+		return a, nil
+	}
+	if err := enrich(ctx, a, cfg, ka.Agnostic); err != nil {
 		return nil, err
 	}
 	return a, nil

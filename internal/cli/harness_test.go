@@ -121,6 +121,7 @@ var fixtureBins = map[string]string{
 	"alpha-cli":   "alpha",
 	"beta-tool":   "beta",
 	"gamma-agent": "gamma",
+	"delta-agent": "delta",
 }
 
 func installFakeBin(t *testing.T, dir, agentID string) {

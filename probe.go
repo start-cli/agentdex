@@ -3,6 +3,7 @@ package agentdex
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -126,11 +127,20 @@ func absPath(p string) string {
 // so schema drift stays loud. Provider-env is read through the validating
 // accessor so a malformed model in a requested provider raises ErrModelsSchema
 // even when per-model enrichment is off; the two are independent.
-func enrich(ctx context.Context, a *Agent, cfg *config) error {
+//
+// When validateCaller is true (agnostic agents with caller-supplied providers),
+// each id is checked against models.dev first and unknown ids return
+// ErrUnknownProvider. Catalog provider lists are not validated that way.
+func enrich(ctx context.Context, a *Agent, cfg *config, validateCaller bool) error {
 	if cfg.models == nil {
 		return nil
 	}
 	mc := cfg.models.client
+	if validateCaller {
+		if err := ValidateCallerProviders(ctx, mc, a.Providers); err != nil {
+			return err
+		}
+	}
 
 	providerEnv := make(map[string]bool)
 	var found []string
@@ -171,6 +181,33 @@ func enrich(ctx context.Context, a *Agent, cfg *config) error {
 			return err
 		}
 		a.Models = models
+	}
+	return nil
+}
+
+// ValidateCallerProviders checks each caller-supplied provider id against
+// models.dev when the client can reach it. The first unknown id returns
+// ErrUnknownProvider. When models.dev is unreachable (non-schema), it returns
+// nil so callers share the existing degrade path. Schema faults propagate.
+// Catalog provider lists on home-provider agents must not use this helper.
+func ValidateCallerProviders(ctx context.Context, mc *modelsdev.Client, ids []string) error {
+	if mc == nil || len(ids) == 0 {
+		return nil
+	}
+	for _, pid := range ids {
+		_, ok, err := mc.Provider(ctx, pid)
+		if err != nil {
+			if errors.Is(err, modelsdev.ErrModelsSchema) {
+				return err
+			}
+			if ctx.Err() != nil {
+				return ctx.Err()
+			}
+			return nil // unreachable: degrade with the caller
+		}
+		if !ok {
+			return fmt.Errorf("%w: %q", ErrUnknownProvider, pid)
+		}
 	}
 	return nil
 }

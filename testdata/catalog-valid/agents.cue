@@ -52,3 +52,23 @@ agents: "gamma-agent": {
 	provider: ["google", "openai"]
 	homepage: "https://example.com/gamma"
 }
+
+agents: "delta-agent": {
+	name:        "Delta Agent"
+	bin:         "delta"
+	description: "Synthetic provider-agnostic agent."
+	config: {
+		global: "~/.delta"
+		local:  ".delta"
+	}
+	skills: {
+		global: "~/.agents/skills"
+		local:  ".agents/skills"
+	}
+	version: {
+		args:    ["--version"]
+		pattern: "v([0-9.]+)"
+	}
+	agnostic: true
+	homepage: "https://example.com/delta"
+}

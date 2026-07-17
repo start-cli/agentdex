@@ -14,7 +14,8 @@ type Catalog struct {
 }
 
 // KnownAgent is one decoded catalog entry. ID is populated from the catalog map
-// key by the loader; the schema's #KnownAgent has no id field.
+// key by the loader; the schema's #KnownAgent has no id field. Agnostic agents
+// carry no Provider list; home-provider agents always have at least one.
 type KnownAgent struct {
 	ID          string
 	Name        string
@@ -23,6 +24,7 @@ type KnownAgent struct {
 	Config      PathPair
 	Skills      *PathPair
 	Version     *VersionProbe
+	Agnostic    bool
 	Provider    []string
 	Homepage    string
 }

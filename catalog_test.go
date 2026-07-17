@@ -29,8 +29,8 @@ func TestLoadCatalogMapsToPublicTypes(t *testing.T) {
 		t.Error("stale = true, want false on a fresh resolve")
 	}
 
-	if len(cat.Agents) != 3 {
-		t.Fatalf("got %d agents, want 3", len(cat.Agents))
+	if len(cat.Agents) != 4 {
+		t.Fatalf("got %d agents, want 4", len(cat.Agents))
 	}
 	for id, a := range cat.Agents {
 		if a.ID != id {
@@ -53,6 +53,9 @@ func TestLoadCatalogMapsToPublicTypes(t *testing.T) {
 	}
 	if alpha.Version == nil || alpha.Version.Pattern != "v([0-9.]+)" || len(alpha.Version.Args) != 1 {
 		t.Errorf("alpha-cli version = %+v", alpha.Version)
+	}
+	if alpha.Agnostic {
+		t.Error("alpha-cli agnostic = true, want false")
 	}
 	if len(alpha.Provider) != 1 || alpha.Provider[0] != "anthropic" {
 		t.Errorf("alpha-cli provider = %v", alpha.Provider)
@@ -77,6 +80,18 @@ func TestLoadCatalogMapsToPublicTypes(t *testing.T) {
 	}
 	if len(gamma.Provider) != 2 || gamma.Provider[0] != "google" || gamma.Provider[1] != "openai" {
 		t.Errorf("gamma-agent providers = %v", gamma.Provider)
+	}
+
+	// delta-agent: provider-agnostic, no provider list.
+	delta := cat.Agents["delta-agent"]
+	if !delta.Agnostic {
+		t.Error("delta-agent agnostic = false, want true")
+	}
+	if len(delta.Provider) != 0 {
+		t.Errorf("delta-agent provider = %v, want empty", delta.Provider)
+	}
+	if delta.Name != "Delta Agent" || delta.Bin != "delta" {
+		t.Errorf("delta-agent name/bin = %q/%q", delta.Name, delta.Bin)
 	}
 }
 

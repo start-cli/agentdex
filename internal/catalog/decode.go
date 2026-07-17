@@ -27,7 +27,8 @@ type cueAgent struct {
 		Args    []string `json:"args"`
 		Pattern string   `json:"pattern,omitempty"`
 	} `json:"version,omitempty"`
-	Provider []string `json:"provider"`
+	Agnostic bool     `json:"agnostic,omitempty"`
+	Provider []string `json:"provider,omitempty"`
 	Homepage string   `json:"homepage,omitempty"`
 }
 
@@ -86,6 +87,7 @@ func loadCatalogModule(sourceDir string) (*Catalog, error) {
 			Bin:         a.Bin,
 			Description: a.Description,
 			Config:      PathPair{Global: a.Config.Global, Local: a.Config.Local},
+			Agnostic:    a.Agnostic,
 			Provider:    a.Provider,
 			Homepage:    a.Homepage,
 		}
