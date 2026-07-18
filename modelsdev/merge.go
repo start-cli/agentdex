@@ -49,13 +49,15 @@ func validateTopLevel(cat *Catalog) error {
 
 // validateProvider applies the per-model required-field check, scoped to a
 // single provider a caller actually requested. A model is malformed when its id
-// is empty or its limit is the zero value (which an absent upstream limit decodes
-// to, and which leaves the model with no usable context limit to enrich from).
-// The check runs only for requested providers, never across the full upstream
+// is empty — the only per-model field upstream guarantees. A zero limit is not
+// malformed: media-generation models (image, audio, video) legitimately carry no
+// token limit and often no pricing, so a limit was never a real invariant to gate
+// on. Gross drift that empties the model map is caught by validateTopLevel. The
+// check runs only for requested providers, never across the full upstream
 // catalog, so an unrelated provider's malformed model cannot break enrichment.
 func validateProvider(p Provider) error {
 	for key, m := range p.Models {
-		if m.ID == "" || m.Limit == (Limit{}) {
+		if m.ID == "" {
 			return fmt.Errorf("provider %q model %q malformed: %w", p.ID, key, ErrModelsSchema)
 		}
 	}

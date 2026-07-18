@@ -44,7 +44,7 @@ type Model struct {
 	LastUpdated      string      `json:"last_updated"`
 	Modalities       Modalities  `json:"modalities"`
 	OpenWeights      bool        `json:"open_weights"`
-	Limit            Limit       `json:"limit"`      // a zero value means no usable context limit: malformed
+	Limit            Limit       `json:"limit"`      // token limits; a zero value is legitimate for media-generation models
 	Cost             *Cost       `json:"cost"`       // USD per 1,000,000 tokens; nil if unknown
 	Status           string      `json:"status"`     // alpha|beta|deprecated
 	Benchmarks       []Benchmark `json:"benchmarks"` // merged in from the agnostic map; absent on provider models upstream
@@ -59,7 +59,8 @@ type Modalities struct {
 }
 
 // Limit holds a model's token limits. An absent upstream limit decodes to the
-// zero value, which the per-model check treats as malformed.
+// zero value, which is legitimate for models that carry no token limit, such as
+// image and other media-generation models.
 type Limit struct {
 	Context int `json:"context"`
 	Input   int `json:"input"`

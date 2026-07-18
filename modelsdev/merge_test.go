@@ -102,7 +102,11 @@ func TestValidateProvider(t *testing.T) {
 	}{
 		{"well formed", Model{ID: "m", Limit: good}, false},
 		{"empty id", Model{ID: "", Limit: good}, true},
-		{"zero limit", Model{ID: "m", Limit: Limit{}}, true},
+		// Media-generation models legitimately carry a zero limit; upstream serves
+		// limit {context:0, output:0} for them. gpt-image-1.5 keeps cost data,
+		// openai-gpt-image-2 has none — neither is malformed.
+		{"limitless image model with cost", Model{ID: "gpt-image-1.5", Limit: Limit{}, Cost: &Cost{Input: 5, Output: 32}}, false},
+		{"limitless image model no cost", Model{ID: "openai-gpt-image-2", Limit: Limit{}}, false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

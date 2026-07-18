@@ -29,8 +29,8 @@ const modelsCatalogJSON = `{
   }
 }`
 
-// malformedModelsJSON has a well-formed top level but a malformed model (zero
-// limit) in the anthropic provider, which the per-provider validating accessor
+// malformedModelsJSON has a well-formed top level but a malformed model (empty
+// id) in the anthropic provider, which the per-provider validating accessor
 // rejects with ErrModelsSchema when anthropic is requested.
 const malformedModelsJSON = `{
   "models": {
@@ -41,7 +41,7 @@ const malformedModelsJSON = `{
       "id": "anthropic",
       "env": ["ANTHROPIC_API_KEY"],
       "models": {
-        "broken": {"id": "broken", "name": "Broken"}
+        "broken": {"id": "", "name": "Broken"}
       }
     }
   }

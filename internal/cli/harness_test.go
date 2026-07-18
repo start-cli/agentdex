@@ -225,15 +225,15 @@ var providerReleaseDates = map[string]string{
 
 // provider builds one provider with a single model. anthropic carries the
 // "claude-sonnet" model so the canonical-id path resolves; other providers carry a
-// generic model. A malformed provider's model has a zero limit.
+// generic model. A malformed provider's model has an empty id.
 func provider(pid string, malformed bool) modelsdev.Provider {
-	limit := modelsdev.Limit{Context: 200000, Output: 8192}
-	if malformed {
-		limit = modelsdev.Limit{}
-	}
 	key, name := pid+"-model", pid+" model"
 	if pid == "anthropic" {
 		key, name = "claude-sonnet", "Claude Sonnet"
+	}
+	id := key
+	if malformed {
+		id = ""
 	}
 	return modelsdev.Provider{
 		ID:   pid,
@@ -241,10 +241,10 @@ func provider(pid string, malformed bool) modelsdev.Provider {
 		Env:  []string{strings.ToUpper(pid) + "_API_KEY"},
 		Models: map[string]modelsdev.Model{
 			key: {
-				ID:          key,
+				ID:          id,
 				Name:        name,
 				ReleaseDate: providerReleaseDates[pid],
-				Limit:       limit,
+				Limit:       modelsdev.Limit{Context: 200000, Output: 8192},
 				Cost:        &modelsdev.Cost{Input: 3, Output: 15},
 			},
 		},

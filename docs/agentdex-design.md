@@ -595,13 +595,15 @@ maps. A top-level violation fails the fetch with `ErrModelsSchema` ("models.dev 
 unrecognised") rather than returning a hollow catalog, and follows the existing
 stale-on-failure behaviour: a previously cached copy is served, and only a first fetch
 with no cache surfaces the error to the caller. The per-model required-field check
-(`id` non-empty, `limit` present) is applied only to the providers a caller actually
-requests, in `Provider` and `Models`, never across the full upstream catalog of
-thousands of models from providers agentdex never enriches. So an unrelated provider's
-malformed model — a limitless embedding model, a half-entered community entry — cannot
-break enrichment for agents whose own providers are well-formed; only a requested
-provider carrying a malformed model raises `ErrModelsSchema`, from the accessor that
-requested it. This is a coarse guard against gross drift, not a full schema check; the
+(`id` non-empty) is applied only to the providers a caller actually requests, in
+`Provider` and `Models`, never across the full upstream catalog of thousands of models
+from providers agentdex never enriches. `id` is the only per-model field upstream
+guarantees; a zero `limit` is not malformed, because media-generation models (image,
+audio, video) legitimately carry no token limit and often no pricing. So an unrelated
+provider's malformed model — a half-entered community entry with no id — cannot break
+enrichment for agents whose own providers are well-formed; only a requested provider
+carrying a malformed model raises `ErrModelsSchema`, from the accessor that requested
+it. This is a coarse guard against gross drift, not a full schema check; the
 `models.url` override remains the way to pin a frozen mirror.
 
 ### Model resolution

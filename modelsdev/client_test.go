@@ -434,10 +434,10 @@ func TestTopLevelSchemaError(t *testing.T) {
 }
 
 func TestPerRequestedProviderSchemaError(t *testing.T) {
-	// A malformed model (zero Limit) sits in "broken"; "anthropic" is clean.
+	// A malformed model (empty id) sits in "broken"; "anthropic" is clean.
 	cat := smallCatalog()
 	cat.Providers["broken"] = Provider{ID: "broken", Models: map[string]Model{
-		"bad": {ID: "bad"}, // zero Limit
+		"bad": {ID: ""}, // empty id
 	}}
 	url, _ := serveBytes(t, mustJSON(t, cat))
 	c := New(WithURL(url), WithCacheDir(t.TempDir()))
