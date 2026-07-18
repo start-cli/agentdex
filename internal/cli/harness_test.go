@@ -291,6 +291,22 @@ func cueCacheDir(t *testing.T) string {
 	return dir
 }
 
+// unsetEnv guarantees name is absent for the duration of the test and restores any
+// prior value on cleanup, so a provider-env assertion does not depend on the host
+// environment. testing has no Unsetenv, so this is done by hand.
+func unsetEnv(t *testing.T, name string) {
+	t.Helper()
+	orig, had := os.LookupEnv(name)
+	if err := os.Unsetenv(name); err != nil {
+		t.Fatalf("unset %s: %v", name, err)
+	}
+	t.Cleanup(func() {
+		if had {
+			_ = os.Setenv(name, orig)
+		}
+	})
+}
+
 func mustMkdir(t *testing.T, dir string) {
 	t.Helper()
 	if err := os.MkdirAll(dir, 0o755); err != nil {

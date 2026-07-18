@@ -8,7 +8,7 @@ import (
 func TestListDetectsInstalledAgents(t *testing.T) {
 	newScenario(t, "", "alpha-cli", "beta-tool", "gamma-agent")
 
-	got := runCLI("list")
+	got := runCLI("agents", "list")
 	if got.code != codeOK {
 		t.Fatalf("list exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -19,10 +19,49 @@ func TestListDetectsInstalledAgents(t *testing.T) {
 	}
 }
 
+func TestListFilterNarrowsByIDAndName(t *testing.T) {
+	// The positional filter is a browse narrowing over id and name: "alpha" matches
+	// alpha-cli only, and matching several lists all of them. Detection order and
+	// enrichment are unaffected.
+	newScenario(t, "", "alpha-cli", "beta-tool", "gamma-agent")
+
+	got := runCLI("--json", "agents", "list", "alpha")
+	if got.code != codeOK {
+		t.Fatalf("list filter exit = %d, stderr=%q", got.code, got.stderr)
+	}
+	rows := got.envelope(t).Data.([]any)
+	if len(rows) != 1 || rows[0].(map[string]any)["id"] != "alpha-cli" {
+		t.Errorf("filter %q rows = %v, want just alpha-cli", "alpha", rows)
+	}
+
+	// A case-insensitive name substring matches too: "tool" hits Beta Tool.
+	byName := runCLI("--json", "agents", "list", "TOOL")
+	if byName.code != codeOK {
+		t.Fatalf("list name filter exit = %d, stderr=%q", byName.code, byName.stderr)
+	}
+	rows = byName.envelope(t).Data.([]any)
+	if len(rows) != 1 || rows[0].(map[string]any)["id"] != "beta-tool" {
+		t.Errorf("name filter %q rows = %v, want just beta-tool", "TOOL", rows)
+	}
+}
+
+func TestListFilterNoMatchIsEmptyExitZero(t *testing.T) {
+	// A filter matching nothing is a normal browse outcome, not not-found.
+	newScenario(t, "", "alpha-cli")
+
+	got := runCLI("--json", "agents", "list", "no-such-agent")
+	if got.code != codeOK {
+		t.Fatalf("no-match filter exit = %d, want 0; stderr=%q", got.code, got.stderr)
+	}
+	if rows := got.envelope(t).Data.([]any); len(rows) != 0 {
+		t.Errorf("no-match filter data = %v, want empty", rows)
+	}
+}
+
 func TestListJSONEnvelope(t *testing.T) {
 	newScenario(t, "", "alpha-cli")
 
-	got := runCLI("--json", "list")
+	got := runCLI("--json", "agents", "list")
 	if got.code != codeOK {
 		t.Fatalf("list exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -53,7 +92,7 @@ func TestListUnknownFieldRejectedRegardlessOfCardinality(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			newScenario(t, "", tc.bins...)
-			got := runCLI("list", "--fields", "bogus")
+			got := runCLI("agents", "list", "--fields", "bogus")
 			if got.code != codeUsage {
 				t.Fatalf("list --fields bogus exit = %d, want 2; stderr=%q", got.code, got.stderr)
 			}
@@ -67,7 +106,7 @@ func TestListValidButAbsentFieldResolvesBlank(t *testing.T) {
 	// error.
 	newScenario(t, "", "alpha-cli")
 
-	got := runCLI("--json", "list", "--fields", "id,provider_env")
+	got := runCLI("--json", "agents", "list", "--fields", "id,provider_env")
 	if got.code != codeOK {
 		t.Fatalf("list --fields id,provider_env exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -83,7 +122,7 @@ func TestListVerboseAddsColumns(t *testing.T) {
 	// full record).
 	newScenario(t, "", "alpha-cli")
 
-	plain := runCLI("list")
+	plain := runCLI("agents", "list")
 	if plain.code != codeOK {
 		t.Fatalf("list exit = %d, stderr=%q", plain.code, plain.stderr)
 	}
@@ -94,7 +133,7 @@ func TestListVerboseAddsColumns(t *testing.T) {
 		t.Errorf("plain list should not show the config_dir column:\n%s", plain.stdout)
 	}
 
-	verbose := runCLI("list", "--verbose")
+	verbose := runCLI("agents", "list", "--verbose")
 	if verbose.code != codeOK {
 		t.Fatalf("list --verbose exit = %d, stderr=%q", verbose.code, verbose.stderr)
 	}
@@ -105,8 +144,8 @@ func TestListVerboseAddsColumns(t *testing.T) {
 	}
 
 	// --verbose is a text-only affordance: it must not widen the JSON payload.
-	jsonPlain := runCLI("--json", "list")
-	jsonVerbose := runCLI("--json", "list", "--verbose")
+	jsonPlain := runCLI("--json", "agents", "list")
+	jsonVerbose := runCLI("--json", "agents", "list", "--verbose")
 	if jsonPlain.stdout != jsonVerbose.stdout {
 		t.Errorf("--verbose changed list --json output:\nplain:\n%s\nverbose:\n%s", jsonPlain.stdout, jsonVerbose.stdout)
 	}
@@ -119,7 +158,7 @@ func TestListAllIncludesMissingAgents(t *testing.T) {
 	// marker (a text-surface affordance only).
 	newScenario(t, "", "beta-tool")
 
-	plain := runCLI("list")
+	plain := runCLI("agents", "list")
 	if plain.code != codeOK {
 		t.Fatalf("list exit = %d, stderr=%q", plain.code, plain.stderr)
 	}
@@ -127,7 +166,7 @@ func TestListAllIncludesMissingAgents(t *testing.T) {
 		t.Errorf("plain list should omit missing agents:\n%s", plain.stdout)
 	}
 
-	all := runCLI("list", "--all")
+	all := runCLI("agents", "list", "--all")
 	if all.code != codeOK {
 		t.Fatalf("list --all exit = %d, stderr=%q", all.code, all.stderr)
 	}
@@ -141,7 +180,7 @@ func TestListAllIncludesMissingAgents(t *testing.T) {
 		t.Errorf("list --all should order detected agents first:\n%s", all.stdout)
 	}
 
-	got := runCLI("--json", "list", "--all")
+	got := runCLI("--json", "agents", "list", "--all")
 	if got.code != codeOK {
 		t.Fatalf("list --all --json exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -181,7 +220,7 @@ func TestListShowsModelsColumn(t *testing.T) {
 	srv := modelsServer(t, []string{"anthropic"})
 	newScenario(t, srv.URL, "alpha-cli")
 
-	got := runCLI("list")
+	got := runCLI("agents", "list")
 	if got.code != codeOK {
 		t.Fatalf("list exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -194,7 +233,7 @@ func TestListShowsModelsColumn(t *testing.T) {
 		t.Errorf("columns out of order, want PROVIDERS < MODELS < BIN:\n%s", got.stdout)
 	}
 
-	j := runCLI("--json", "list")
+	j := runCLI("--json", "agents", "list")
 	row := j.envelope(t).Data.([]any)[0].(map[string]any)
 	models, ok := row["models"].([]any)
 	if !ok || len(models) != 1 {
@@ -208,7 +247,7 @@ func TestListDegradesWhenModelsUnreachable(t *testing.T) {
 	// zero reads as "unavailable" rather than a genuine empty catalog.
 	newScenario(t, closedModelsServer(t), "alpha-cli")
 
-	got := runCLI("list")
+	got := runCLI("agents", "list")
 	if got.code != codeOK {
 		t.Fatalf("list with unreachable models.dev exit = %d, want 0; stderr=%q", got.code, got.stderr)
 	}
@@ -218,7 +257,7 @@ func TestListDegradesWhenModelsUnreachable(t *testing.T) {
 
 	// The degraded JSON carries [] (not null) so it matches the "0" count cell and
 	// stays scripting-safe, and a warning explains the zero.
-	j := runCLI("--json", "list")
+	j := runCLI("--json", "agents", "list")
 	env := j.envelope(t)
 	if !anyContains(env.Warnings, "unreachable") {
 		t.Errorf("degraded list should warn that model counts are unavailable: %v", env.Warnings)
@@ -237,7 +276,7 @@ func TestListDegradesOnModelsSchemaDrift(t *testing.T) {
 	srv := modelsServer(t, nil, "anthropic") // anthropic ships a malformed model
 	newScenario(t, srv.URL, "alpha-cli")
 
-	got := runCLI("--json", "list")
+	got := runCLI("--json", "agents", "list")
 	if got.code != codeOK {
 		t.Fatalf("list on models schema drift exit = %d, want 0; stderr=%q", got.code, got.stderr)
 	}
@@ -257,7 +296,7 @@ func TestListJSONCarriesFullRecord(t *testing.T) {
 	// never silently truncated. bin, config_dir, and homepage are non-default fields.
 	newScenario(t, "", "alpha-cli")
 
-	got := runCLI("--json", "list")
+	got := runCLI("--json", "agents", "list")
 	if got.code != codeOK {
 		t.Fatalf("list exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -278,13 +317,13 @@ func TestListWarnsOnStaleCatalog(t *testing.T) {
 	s := newScenario(t, "", "alpha-cli")
 	s.writeConfig(t, "color: \"never\"\nsearch_dirs: [\""+s.binDir+"\"]\ncatalog: ttl: \"0s\"\n")
 
-	if got := runCLI("list"); got.code != codeOK {
+	if got := runCLI("agents", "list"); got.code != codeOK {
 		t.Fatalf("warm list exit = %d; stderr=%q", got.code, got.stderr)
 	}
 
 	s.closeRegistry() // re-resolution can no longer reach the registry
 
-	got := runCLI("--json", "list")
+	got := runCLI("--json", "agents", "list")
 	if got.code != codeOK {
 		t.Fatalf("stale list exit = %d, want 0; stderr=%q", got.code, got.stderr)
 	}

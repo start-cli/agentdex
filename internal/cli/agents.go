@@ -5,33 +5,198 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
-	"github.com/spf13/pflag"
 
 	"github.com/start-cli/agentdex"
 	"github.com/start-cli/agentdex/internal/config"
-	"github.com/start-cli/agentdex/internal/match"
 	"github.com/start-cli/agentdex/internal/tui"
 	"github.com/start-cli/agentdex/modelsdev"
 )
 
-func (a *app) newGetCmd() *cobra.Command {
+// newAgentsCmd is the agents noun group: a browse verb (list) and an exact fetch
+// verb (get). The group itself is not runnable; a bare invocation is a usage fault.
+func (a *app) newAgentsCmd() *cobra.Command {
+	return a.newNounCmd(
+		"agents", "agent", "Detected AI coding agents",
+		a.newAgentsListCmd(),
+		a.newAgentsGetCmd(),
+	)
+}
+
+func (a *app) newAgentsListCmd() *cobra.Command {
+	var (
+		all       bool
+		fields    []string
+		providers []string
+	)
+	cmd := &cobra.Command{
+		Use:   "list [filter]",
+		Short: "List detected agents",
+		Long: "List the AI coding agents detected on this machine. Each agent's model count " +
+			"is enriched from models.dev, served from the local cache when warm and degrading " +
+			"to zero when models.dev cannot be reached. Provider-agnostic agents show \"-\" " +
+			"unless --provider is given. --all adds the catalogued agents whose binary was " +
+			"not found, with \"missing\" in the BIN column. An optional filter narrows the list " +
+			"to agents whose id or name contains it (case-insensitive); a filter matching " +
+			"nothing prints an empty listing and exits 0.",
+		Args: cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := a.requireConfig()
+			if err != nil {
+				return a.failConfig(cmd, err)
+			}
+			flags, err := a.mapFlags()
+			if err != nil {
+				return a.usage(cmd, err)
+			}
+			filter := ""
+			if len(args) == 1 {
+				filter = args[0]
+			}
+
+			cat, stale, err := agentdex.LoadCatalog(cmd.Context(), cfg.CatalogOptions(cfg.CatalogTTL)...)
+			if err != nil {
+				return a.fail(cmd, codeFor(err), err)
+			}
+			var warnings []string
+			if stale {
+				warnings = append(warnings, staleCatalogWarning)
+			}
+
+			callerProviders := flattenProviders(providers)
+			base := append(cfg.LibraryOptions(flags), agentdex.WithCatalog(cat))
+			if len(callerProviders) > 0 {
+				base = append(base, agentdex.WithProviders(callerProviders...))
+			}
+			if all {
+				base = append(base, agentdex.IncludeMissing())
+			}
+			// Probe models.dev once for reachability, reusing this client for the
+			// enrichment below so the catalog is fetched at most once (the client
+			// memoises it). Enrichment is served from the warm cache with no network
+			// and degrades to a nil model list when models.dev is unreachable, so a
+			// model count column is shown without ever failing the listing. But an
+			// unreachable-and-uncached models.dev warns, so the resulting zero reads as
+			// "unavailable" rather than a genuine empty catalog — as loud as get's
+			// degrade and the schema-drift branch below. A malformed catalog is left to
+			// that branch (Catalog does not surface per-provider drift). The defensive
+			// copy keeps base intact for the schema-drift fallback.
+			client := cfg.ModelsClient()
+			// Validate caller-supplied provider ids at the boundary so an unknown id
+			// is a usage fault regardless of whether an agnostic agent is installed to
+			// enrich against it. Schema drift and unreachability defer to the
+			// enrichment path's existing tolerance below.
+			if len(callerProviders) > 0 {
+				if verr := agentdex.ValidateCallerProviders(cmd.Context(), client, callerProviders); errors.Is(verr, agentdex.ErrUnknownProvider) {
+					return a.fail(cmd, codeFor(verr), verr, warnings...)
+				}
+			}
+			opts := append(append([]agentdex.Option(nil), base...), agentdex.WithModels(client, agentdex.EnrichModels()))
+			if _, cerr := client.Catalog(cmd.Context()); cerr != nil && !errors.Is(cerr, modelsdev.ErrModelsSchema) {
+				warnings = append(warnings, "model counts unavailable: models.dev is unreachable and not cached")
+				opts = base
+			}
+
+			agents, err := agentdex.Detect(cmd.Context(), opts...)
+			if errors.Is(err, modelsdev.ErrModelsSchema) {
+				// Malformed models.dev data would otherwise kill the whole listing over
+				// an auxiliary column. Detection itself is sound, so re-detect without
+				// enrichment and warn: the drift stays loud, but list keeps working.
+				warnings = append(warnings, fmt.Sprintf("model counts omitted: %v", err))
+				agents, err = agentdex.Detect(cmd.Context(), base...)
+			}
+			if err != nil {
+				// Unknown caller providers are usage faults; list otherwise soft-skips
+				// agnostic agents without providers so a mixed catalog never fails.
+				return a.fail(cmd, codeFor(err), err)
+			}
+			if filter != "" {
+				agents = filterAgents(agents, filter)
+			}
+			a.log.Debug("list detected agents", "count", len(agents), "all", all, "filter", filter)
+
+			// Under --all, detected agents read first; the not-found tail keeps the
+			// library's by-id order within each group.
+			sort.SliceStable(agents, func(i, j int) bool { return agents[i].Found && !agents[j].Found })
+
+			recs := make([]*record, len(agents))
+			for i := range agents {
+				r := agentRecord(&agents[i])
+				ka, ok := cat.Agents[agents[i].ID]
+				if ok && ka.Agnostic && len(callerProviders) == 0 {
+					// Not applicable: JSON null / text "-", not the degrade [] / 0 shape.
+					withModelsNA(r)
+				} else {
+					withModels(r, agents[i].Models)
+				}
+				recs[i] = r
+			}
+
+			// Compose the table columns: --verbose widens them. This is a text-table
+			// affordance only; the JSON payload always carries the full record (driven
+			// by the user's --fields selection), so it is unaffected. An explicit
+			// --fields wins over both.
+			tableCols := fields
+			if len(tableCols) == 0 {
+				tableCols = agentFieldSet.defaults
+				if a.verbose {
+					tableCols = agentVerboseFields
+				}
+			}
+
+			data, headers, rows, err := tabulate(recs, fields, tableCols, agentFieldSet)
+			if err != nil {
+				return a.usage(cmd, err)
+			}
+			empty := "No agents detected."
+			if all {
+				empty = "No agents catalogued."
+			}
+			return a.ok(cmd, data, warnings, func(w io.Writer) {
+				fmt.Fprintln(w)
+				renderTable(w, headers, rows, empty)
+			})
+		},
+	}
+	cmd.Flags().BoolVar(&all, "all", false, "Include catalogued agents that were not detected")
+	cmd.Flags().StringSliceVar(&providers, "provider", nil, "models.dev provider ids for agnostic agents' model counts (repeatable or csv)")
+	registerFieldsFlag(cmd, &fields)
+	addFieldsHelpSection(cmd, agentFieldSet)
+	return cmd
+}
+
+// filterAgents narrows detected agents to those whose id or name contains the
+// browse filter (case-insensitive), applied after detection so enrichment and the
+// --all/--provider/--verbose behaviour are unchanged by the filter.
+func filterAgents(agents []agentdex.Agent, filter string) []agentdex.Agent {
+	needle := strings.ToLower(filter)
+	out := make([]agentdex.Agent, 0, len(agents))
+	for _, ag := range agents {
+		if matchesFilter(ag.ID, ag.Name, needle) {
+			out = append(out, ag)
+		}
+	}
+	return out
+}
+
+func (a *app) newAgentsGetCmd() *cobra.Command {
 	var (
 		models    bool
 		fields    []string
 		providers []string
 	)
 	cmd := &cobra.Command{
-		Use:     "get <agent>",
+		Use:     "get <id>",
 		Aliases: []string{"view", "show"},
-		GroupID: groupCore,
 		Short:   "Show detail for one agent",
-		Long: "Show detection detail for one agent: its binary, version, config and skills " +
-			"paths, and provider-env presence. Models are off by default; pass --models or " +
-			"include models in --fields to fill the per-model list. Provider-agnostic agents " +
-			"omit provider fields until --provider is supplied.",
+		Long: "Show detection detail for one agent, selected exactly by its catalog id: its " +
+			"binary, version, config and skills paths, and provider-env presence. Models are " +
+			"off by default; pass --models or include models in --fields to fill the per-model " +
+			"list. Provider-agnostic agents omit provider fields until --provider is supplied. " +
+			"An id that names no catalogued agent is not-found (exit 3).",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := a.requireConfig()
@@ -49,26 +214,19 @@ func (a *app) newGetCmd() *cobra.Command {
 			}
 			var warnings []string
 			if stale {
-				warnings = append(warnings, "agent catalog is stale: re-resolution failed, using the last resolved version")
+				warnings = append(warnings, staleCatalogWarning)
 			}
 
-			callerProviders := flattenProviders(providers)
-			outcome, id, candidates := matchAgent(cat, args[0])
-			switch outcome {
-			case match.Ambiguous:
-				return a.fail(cmd, codeNotFound, fmt.Errorf("ambiguous agent %q: matches %s", args[0], strings.Join(candidates, ", ")), warnings...)
-			case match.None:
-				// The provider fallthrough reports a models.dev provider, not an
-				// agent; --provider is meaningless there and is rejected rather
-				// than silently dropped.
-				if len(callerProviders) > 0 {
-					return a.fail(cmd, codeUsage, fmt.Errorf("%q is not a catalogued agent; --provider is only valid for provider-agnostic agents", args[0]), warnings...)
-				}
-				return a.getFallthrough(cmd, cfg.ModelsClient(), cat, args[0], models, warnings)
+			// Exact fetch: the id is the catalog key, no fuzzy resolution and no
+			// provider fallthrough. A miss is not-found with no candidate list.
+			id := args[0]
+			ka, ok := cat.Agents[id]
+			if !ok {
+				return a.fail(cmd, codeNotFound, fmt.Errorf("no agent %q; run \"agentdex agents list --all\" to see agent ids", id), warnings...)
 			}
 			a.log.Debug("get resolved agent", "id", id)
 
-			ka := cat.Agents[id]
+			callerProviders := flattenProviders(providers)
 			if !ka.Agnostic && len(callerProviders) > 0 {
 				return a.fail(cmd, codeUsage, fmt.Errorf("agent %q has catalog providers; --provider is only valid for provider-agnostic agents", id), warnings...)
 			}
@@ -171,26 +329,6 @@ func modelsDevDemand(fields []string) bool {
 	return false
 }
 
-// flattenProviders normalises --provider values: StringSlice already csv-splits,
-// but empty entries from accidental commas are dropped, as are duplicate ids
-// (a repeated id would double-list models and break unique query resolution).
-func flattenProviders(raw []string) []string {
-	out := make([]string, 0, len(raw))
-	seen := make(map[string]struct{}, len(raw))
-	for _, p := range raw {
-		p = strings.TrimSpace(p)
-		if p == "" {
-			continue
-		}
-		if _, dup := seen[p]; dup {
-			continue
-		}
-		seen[p] = struct{}{}
-		out = append(out, p)
-	}
-	return out
-}
-
 // getAgnosticSoftPath is unfiltered get on an agnostic agent without --provider:
 // outside facts only, omit the three provider-related fields, warn how to enrich.
 // Exit 0 when Found; exit 3 with the not-installed error when not Found. The
@@ -236,43 +374,6 @@ func (a *app) getAgnosticEnrich(cmd *cobra.Command, cfg *config.Config, flags co
 	full.Version = agent.Version
 	sortModelsNewest(full.Models)
 	return a.reportAgent(cmd, full, fields, warnings)
-}
-
-// addHelpSection injects a titled, pre-formatted section into the command's help,
-// rendered between Flags and Global Flags so it mirrors cobra's own section layout
-// rather than being buried in the description. body is emitted verbatim, so the
-// caller owns its indentation and line breaks.
-func addHelpSection(cmd *cobra.Command, title, body string) {
-	section := "\n\n" + title + ":\n" + body
-	tmpl := strings.Replace(cmd.UsageTemplate(),
-		"{{if .HasAvailableInheritedFlags}}",
-		section+"{{if .HasAvailableInheritedFlags}}", 1)
-	cmd.SetUsageTemplate(tmpl)
-}
-
-// addFieldsHelpSection injects a "Fields" section listing the valid --fields keys.
-// The list is drawn from the field set --fields validates against, so the help can
-// never drift from what is accepted.
-func addFieldsHelpSection(cmd *cobra.Command, set fieldSet) {
-	// Split the keys across two indented rows so the section stays compact rather
-	// than running to one wide line.
-	half := (len(set.all) + 1) / 2
-	rows := "  " + strings.Join(set.all[:half], ", ") + "\n  " + strings.Join(set.all[half:], ", ")
-	addHelpSection(cmd, "Fields", rows)
-}
-
-// registerFieldsFlag adds the shared --fields flag and accepts the singular
-// --field as an alias, so a common slip resolves to the same flag instead of
-// failing with an unknown-flag usage error. The alias is invisible in help;
-// --fields stays the one documented name.
-func registerFieldsFlag(cmd *cobra.Command, fields *[]string) {
-	cmd.Flags().StringSliceVar(fields, "fields", nil, "Select output fields (csv)")
-	cmd.Flags().SetNormalizeFunc(func(_ *pflag.FlagSet, name string) pflag.NormalizedName {
-		if name == "field" {
-			name = "fields"
-		}
-		return pflag.NormalizedName(name)
-	})
 }
 
 // coverage is the per-provider models.dev rollup verdict for a detected agent.
@@ -369,62 +470,6 @@ func (a *app) getCoverage(cmd *cobra.Command, cfg *config.Config, flags config.F
 		warnings = append(warnings, fmt.Sprintf("some providers are absent from models.dev: %s", strings.Join(absent, ", ")))
 	}
 	return a.reportAgent(cmd, full, fields, warnings)
-}
-
-// getFallthrough handles a query that matched no catalog agent: it is classified
-// against models.dev's providers. A unique provider match reports that provider
-// at exit 3; the models dump is included only when withModels is true. No provider
-// match is genuinely unknown at exit 2. If models.dev cannot be reached the query
-// cannot be classified at all, so it exits transient rather than asserting either
-// verdict.
-func (a *app) getFallthrough(cmd *cobra.Command, client *modelsdev.Client, cat *agentdex.Catalog, query string, withModels bool, warnings []string) error {
-	outcome, prov, _, err := matchProvider(cmd.Context(), client, query)
-	if err != nil {
-		return a.fail(cmd, codeTransient, fmt.Errorf("cannot classify %q: models.dev is unreachable: %w", query, err), warnings...)
-	}
-	if outcome != match.Unique {
-		return a.fail(cmd, codeUsage, fmt.Errorf("no such agent %q; valid ids: %s", query, strings.Join(catalogIDs(cat), ", ")), warnings...)
-	}
-	a.log.Debug("get fallthrough matched provider", "query", query, "provider", prov.ID, "models", withModels)
-
-	data := map[string]any{
-		"provider": prov.ID,
-		"name":     prov.Name,
-	}
-	note := fmt.Errorf("%q is not a catalogued agent; showing models.dev provider %q (install details unavailable, not catalogued)", query, prov.ID)
-
-	var modelRecs []*record
-	if withModels {
-		models := make([]modelsdev.Model, 0, len(prov.Models))
-		for _, key := range sortedKeys(prov.Models) {
-			models = append(models, prov.Models[key])
-		}
-		sortModelsNewest(models)
-		modelRecs = make([]*record, len(models))
-		for i, m := range models {
-			modelRecs[i] = modelRecord(m, prov.ID, "")
-		}
-		data["models"] = jsonRecords(modelRecs)
-	}
-
-	return a.failData(cmd, codeNotFound, note, data, func(w io.Writer) {
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, tui.Header.Sprint("Provider"))
-		renderDetail(w, []field{
-			{key: "provider", text: prov.ID},
-			{key: "name", text: prov.Name},
-		})
-		if !withModels {
-			return
-		}
-		fmt.Fprintln(w)
-		fmt.Fprintln(w, tui.Header.Sprint("Models"))
-		_, headers, rows, _ := tabulate(modelRecs, nil, modelFieldSet.defaults, modelFieldSet)
-		renderTable(w, headers, rows, "No models.")
-		if len(rows) > 0 {
-			renderPriceFooter(w, modelFieldSet.defaults)
-		}
-	}, warnings)
 }
 
 // reportAgent renders a detected agent at exit 0: the JSON record under --json,
@@ -594,15 +639,4 @@ func existenceNote(key string, agent *agentdex.Agent) string {
 		return "exists"
 	}
 	return "missing"
-}
-
-// jsonRecords resolves records to their full present-field JSON maps, for nesting
-// under a parent payload (the provider-fallthrough models list).
-func jsonRecords(recs []*record) []map[string]any {
-	out := make([]map[string]any, 0, len(recs))
-	for _, r := range recs {
-		fs, _ := r.resolve(nil)
-		out = append(out, jsonObject(fs))
-	}
-	return out
 }

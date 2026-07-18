@@ -24,7 +24,7 @@ func TestMalformedConfigExits78(t *testing.T) {
 	s := newScenario(t, "", "alpha-cli")
 	s.writeConfig(t, `color: "not-a-mode"`)
 
-	got := runCLI("list")
+	got := runCLI("agents", "list")
 	if got.code != codeConfig {
 		t.Fatalf("malformed config exit = %d, want 78; stderr=%q", got.code, got.stderr)
 	}
@@ -43,7 +43,7 @@ func TestUnreadableConfigExits4(t *testing.T) {
 	}
 	t.Cleanup(func() { _ = os.Chmod(cfgPath, 0o644) })
 
-	got := runCLI("list")
+	got := runCLI("agents", "list")
 	if got.code != codePermission {
 		t.Fatalf("unreadable config exit = %d, want 4; stderr=%q", got.code, got.stderr)
 	}
@@ -64,7 +64,7 @@ func TestConfigRejectsRemovedEnrichModels(t *testing.T) {
 	s := newScenario(t, "", "alpha-cli")
 	s.writeConfig(t, configBody("", s.binDir, "enrich_models: false\n"))
 
-	got := runCLI("list")
+	got := runCLI("agents", "list")
 	if got.code != codeConfig {
 		t.Fatalf("enrich_models leftover exit = %d, want 78; stderr=%q", got.code, got.stderr)
 	}
@@ -73,7 +73,7 @@ func TestConfigRejectsRemovedEnrichModels(t *testing.T) {
 func TestListFieldsSelection(t *testing.T) {
 	newScenario(t, "", "alpha-cli")
 
-	got := runCLI("--json", "list", "--fields", "id,version")
+	got := runCLI("--json", "agents", "list", "--fields", "id,version")
 	if got.code != codeOK {
 		t.Fatalf("list --fields exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -89,7 +89,7 @@ func TestListFieldsSelection(t *testing.T) {
 func TestUnknownFieldIsUsageError(t *testing.T) {
 	newScenario(t, "", "alpha-cli")
 
-	got := runCLI("list", "--fields", "nope")
+	got := runCLI("agents", "list", "--fields", "nope")
 	if got.code != codeUsage {
 		t.Fatalf("unknown field exit = %d, want 2; stderr=%q", got.code, got.stderr)
 	}
@@ -100,7 +100,7 @@ func TestFieldSingularAliasSelectsFields(t *testing.T) {
 	// slip resolves to the same selector instead of an unknown-flag usage error.
 	newScenario(t, "", "alpha-cli")
 
-	got := runCLI("--json", "list", "--field", "id,version")
+	got := runCLI("--json", "agents", "list", "--field", "id,version")
 	if got.code != codeOK {
 		t.Fatalf("list --field exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -118,14 +118,14 @@ func TestInvalidColorFlagIsUsageError(t *testing.T) {
 	// so it is a usage fault (exit 2) regardless of the subcommand.
 	newScenario(t, "", "alpha-cli")
 
-	got := runCLI("--color", "rainbow", "list")
+	got := runCLI("--color", "rainbow", "agents", "list")
 	if got.code != codeUsage {
 		t.Fatalf("invalid --color exit = %d, want 2; stderr=%q", got.code, got.stderr)
 	}
 
 	// Under --json the usage fault must still arrive as the standard envelope on
 	// stdout, not as plain stderr text, like every other usage error.
-	gotJSON := runCLI("--json", "--color", "rainbow", "list")
+	gotJSON := runCLI("--json", "--color", "rainbow", "agents", "list")
 	if gotJSON.code != codeUsage {
 		t.Fatalf("invalid --color --json exit = %d, want 2; stderr=%q", gotJSON.code, gotJSON.stderr)
 	}
@@ -140,7 +140,7 @@ func TestMalformedBinPathIsUsageError(t *testing.T) {
 	// fails fast as a usage error.
 	newScenario(t, "", "alpha-cli")
 
-	got := runCLI("list", "--bin-path", "no-equals-sign")
+	got := runCLI("agents", "list", "--bin-path", "no-equals-sign")
 	if got.code != codeUsage {
 		t.Fatalf("malformed --bin-path exit = %d, want 2; stderr=%q", got.code, got.stderr)
 	}
@@ -154,7 +154,7 @@ func TestSearchDirValueTakenLiterally(t *testing.T) {
 	mustMkdir(t, commaDir)
 	installFakeBin(t, commaDir, "alpha-cli")
 
-	got := runCLI("list", "--search-dir", commaDir)
+	got := runCLI("agents", "list", "--search-dir", commaDir)
 	if got.code != codeOK {
 		t.Fatalf("list --search-dir exit = %d, stderr=%q", got.code, got.stderr)
 	}

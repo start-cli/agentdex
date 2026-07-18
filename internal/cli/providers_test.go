@@ -88,7 +88,7 @@ func TestProvidersListAllSortedByID(t *testing.T) {
 	srv := modelsServer(t, []string{"anthropic", "google", "openai"})
 	newScenario(t, srv.URL)
 
-	got := runCLI("--json", "providers")
+	got := runCLI("--json", "providers", "list")
 	if got.code != codeOK {
 		t.Fatalf("providers exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -114,7 +114,7 @@ func TestProvidersFilterNarrows(t *testing.T) {
 	srv := modelsServer(t, []string{"anthropic", "google", "openai"})
 	newScenario(t, srv.URL)
 
-	got := runCLI("--json", "providers", "E")
+	got := runCLI("--json", "providers", "list", "E")
 	if got.code != codeOK {
 		t.Fatalf("providers filter exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -133,7 +133,7 @@ func TestProvidersFilterNoMatchIsEmptyExitZero(t *testing.T) {
 	srv := modelsServer(t, []string{"anthropic"})
 	newScenario(t, srv.URL)
 
-	got := runCLI("--json", "providers", "no-such-provider")
+	got := runCLI("--json", "providers", "list", "no-such-provider")
 	if got.code != codeOK {
 		t.Fatalf("no-match filter exit = %d, want 0; stderr=%q", got.code, got.stderr)
 	}
@@ -141,7 +141,7 @@ func TestProvidersFilterNoMatchIsEmptyExitZero(t *testing.T) {
 		t.Errorf("no-match filter data = %v, want empty", rows)
 	}
 
-	text := runCLI("providers", "no-such-provider")
+	text := runCLI("providers", "list", "no-such-provider")
 	if !strings.Contains(text.stdout, "No providers.") {
 		t.Errorf("no-match text output missing empty-state line:\n%s", text.stdout)
 	}
@@ -151,7 +151,7 @@ func TestProvidersJSONModelsIsArrayCellIsCount(t *testing.T) {
 	srv := modelsServer(t, []string{"anthropic"})
 	newScenario(t, srv.URL)
 
-	got := runCLI("--json", "providers", "anthropic")
+	got := runCLI("--json", "providers", "list", "anthropic")
 	if got.code != codeOK {
 		t.Fatalf("providers exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -163,7 +163,7 @@ func TestProvidersJSONModelsIsArrayCellIsCount(t *testing.T) {
 
 	// The MODELS cell renders the array length, so id,models isolates it from any
 	// incidental "1" elsewhere in the row.
-	text := runCLI("providers", "anthropic", "--fields", "id,models")
+	text := runCLI("providers", "list", "anthropic", "--fields", "id,models")
 	if text.code != codeOK {
 		t.Fatalf("providers --fields id,models exit = %d, stderr=%q", text.code, text.stderr)
 	}
@@ -186,7 +186,7 @@ func TestProvidersFieldsSelectionAndValidation(t *testing.T) {
 	srv := modelsServer(t, []string{"anthropic"})
 	newScenario(t, srv.URL)
 
-	got := runCLI("--json", "providers", "anthropic", "--fields", "id,present")
+	got := runCLI("--json", "providers", "list", "anthropic", "--fields", "id,present")
 	if got.code != codeOK {
 		t.Fatalf("providers --fields exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -199,7 +199,7 @@ func TestProvidersFieldsSelectionAndValidation(t *testing.T) {
 	}
 
 	// --fields drives the text table columns too, not just the JSON payload.
-	text := runCLI("providers", "anthropic", "--fields", "id,present")
+	text := runCLI("providers", "list", "anthropic", "--fields", "id,present")
 	if text.code != codeOK {
 		t.Fatalf("providers --fields text exit = %d, stderr=%q", text.code, text.stderr)
 	}
@@ -212,7 +212,7 @@ func TestProvidersFieldsSelectionAndValidation(t *testing.T) {
 		}
 	}
 
-	bad := runCLI("providers", "anthropic", "--fields", "bogus")
+	bad := runCLI("providers", "list", "anthropic", "--fields", "bogus")
 	if bad.code != codeUsage {
 		t.Fatalf("unknown --fields exit = %d, want 2; stderr=%q", bad.code, bad.stderr)
 	}
@@ -224,7 +224,7 @@ func TestProvidersUnknownFieldRejectedOnEmptyResult(t *testing.T) {
 	srv := modelsServer(t, []string{"anthropic"})
 	newScenario(t, srv.URL)
 
-	got := runCLI("providers", "no-such-provider", "--fields", "bogus")
+	got := runCLI("providers", "list", "no-such-provider", "--fields", "bogus")
 	if got.code != codeUsage {
 		t.Fatalf("unknown --fields on empty result exit = %d, want 2; stderr=%q", got.code, got.stderr)
 	}
@@ -233,7 +233,7 @@ func TestProvidersUnknownFieldRejectedOnEmptyResult(t *testing.T) {
 func TestProvidersTransientWhenUnreachable(t *testing.T) {
 	newScenario(t, closedModelsServer(t))
 
-	got := runCLI("providers")
+	got := runCLI("providers", "list")
 	if got.code != codeTransient {
 		t.Fatalf("providers unreachable exit = %d, want 75; stderr=%q", got.code, got.stderr)
 	}
@@ -245,8 +245,104 @@ func TestProvidersSchemaDriftIsConfig(t *testing.T) {
 	srv := modelsServer(t, nil)
 	newScenario(t, srv.URL)
 
-	got := runCLI("providers")
+	got := runCLI("providers", "list")
 	if got.code != codeConfig {
 		t.Fatalf("providers schema drift exit = %d, want 78; stderr=%q", got.code, got.stderr)
+	}
+}
+
+func TestProvidersGetKnown(t *testing.T) {
+	// providers get is an exact fetch by provider id, rendering the provider's facts,
+	// a symmetric-marker provider-env section, and a model count by default (no full
+	// table). The models field stays array-typed in JSON.
+	srv := modelsServer(t, []string{"anthropic"})
+	newScenario(t, srv.URL)
+	// Deterministically unset the provider's key var so the symmetric marker is
+	// "(unset)" regardless of the host environment, distinguishing the get renderer
+	// from the folded browse cell (which shows a bare name when unset).
+	unsetEnv(t, "ANTHROPIC_API_KEY")
+
+	got := runCLI("--json", "providers", "get", "anthropic")
+	if got.code != codeOK {
+		t.Fatalf("providers get exit = %d, stderr=%q", got.code, got.stderr)
+	}
+	data := got.envelope(t).Data.(map[string]any)
+	if data["id"] != "anthropic" {
+		t.Errorf("id = %v, want anthropic", data["id"])
+	}
+	if _, ok := data["present"]; !ok {
+		t.Errorf("providers get should carry the present map: %v", data)
+	}
+	models, ok := data["models"].([]any)
+	if !ok || len(models) != 1 {
+		t.Errorf("models field = %v, want a 1-element JSON array", data["models"])
+	}
+
+	// Text detail: Provider, Provider env, and Models (a count) sections, with the
+	// symmetric (set)/(unset) marker rather than the folded browse cell.
+	text := runCLI("providers", "get", "anthropic")
+	if text.code != codeOK {
+		t.Fatalf("providers get text exit = %d, stderr=%q", text.code, text.stderr)
+	}
+	for _, section := range []string{"Provider", "Provider env", "Models"} {
+		if !hasTextSection(text.stdout, section) {
+			t.Errorf("providers get text missing %q section:\n%s", section, text.stdout)
+		}
+	}
+	if !strings.Contains(text.stdout, "(unset)") {
+		t.Errorf("providers get should use the symmetric (unset) marker:\n%s", text.stdout)
+	}
+}
+
+func TestProvidersGetUnknownIsNotFound(t *testing.T) {
+	srv := modelsServer(t, []string{"anthropic"})
+	newScenario(t, srv.URL)
+
+	got := runCLI("providers", "get", "no-such-provider")
+	if got.code != codeNotFound {
+		t.Fatalf("providers get unknown exit = %d, want 3; stderr=%q", got.code, got.stderr)
+	}
+}
+
+func TestProvidersGetModelsFillsTable(t *testing.T) {
+	// --models fills the full model table under the Models section.
+	srv := modelsServer(t, []string{"anthropic"})
+	newScenario(t, srv.URL)
+
+	text := runCLI("providers", "get", "anthropic", "--models")
+	if text.code != codeOK {
+		t.Fatalf("providers get --models exit = %d, stderr=%q", text.code, text.stderr)
+	}
+	if !hasTextSection(text.stdout, "Models") {
+		t.Errorf("providers get --models should keep the Models section:\n%s", text.stdout)
+	}
+	// The full model table names the provider's model; the count-only default does not.
+	if !strings.Contains(text.stdout, "Claude Sonnet") {
+		t.Errorf("providers get --models should list the model row:\n%s", text.stdout)
+	}
+	if !strings.Contains(text.stdout, priceUnitNote) {
+		t.Errorf("providers get --models table should carry the price footer:\n%s", text.stdout)
+	}
+}
+
+func TestProvidersGetTransientWhenUnreachable(t *testing.T) {
+	newScenario(t, closedModelsServer(t))
+
+	got := runCLI("providers", "get", "anthropic")
+	if got.code != codeTransient {
+		t.Fatalf("providers get unreachable exit = %d, want 75; stderr=%q", got.code, got.stderr)
+	}
+}
+
+func TestProvidersGetSchemaDriftIsConfig(t *testing.T) {
+	// A reachable models.dev serving gross structural drift (an empty top-level
+	// providers map) is a data fault (exit 78), not an outage: providers get must
+	// classify it as config like providers list does.
+	srv := modelsServer(t, nil)
+	newScenario(t, srv.URL)
+
+	got := runCLI("providers", "get", "anthropic")
+	if got.code != codeConfig {
+		t.Fatalf("providers get schema drift exit = %d, want 78; stderr=%q", got.code, got.stderr)
 	}
 }

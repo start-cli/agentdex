@@ -13,7 +13,7 @@ func TestGetAgnosticSoftPathOmitsProviderFields(t *testing.T) {
 	// only, omits providers / provider_env / models, and warns how to enrich.
 	newScenario(t, "", "delta-agent")
 
-	got := runCLI("--json", "get", "delta-agent")
+	got := runCLI("--json", "agents", "get", "delta-agent")
 	if got.code != codeOK {
 		t.Fatalf("get exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -33,7 +33,7 @@ func TestGetAgnosticModelsWithoutProviderIsUsage(t *testing.T) {
 	// Demanding models from an agnostic agent without --provider is a usage fault.
 	newScenario(t, "", "delta-agent")
 
-	got := runCLI("get", "delta-agent", "--models")
+	got := runCLI("agents", "get", "delta-agent", "--models")
 	if got.code != codeUsage {
 		t.Fatalf("get --models exit = %d, want %d; stderr=%q", got.code, codeUsage, got.stderr)
 	}
@@ -46,7 +46,7 @@ func TestGetAgnosticEnrichesWithProvider(t *testing.T) {
 	// With --provider the agnostic agent enriches against the caller-supplied set.
 	newScenario(t, "", "delta-agent")
 
-	got := runCLI("--json", "get", "delta-agent", "--models", "--provider", "anthropic")
+	got := runCLI("--json", "agents", "get", "delta-agent", "--models", "--provider", "anthropic")
 	if got.code != codeOK {
 		t.Fatalf("get --models --provider exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -63,7 +63,7 @@ func TestGetAgnosticEnrichesWithProvider(t *testing.T) {
 func TestGetAgnosticUnknownProviderIsUsage(t *testing.T) {
 	newScenario(t, "", "delta-agent")
 
-	got := runCLI("get", "delta-agent", "--models", "--provider", "bogus")
+	got := runCLI("agents", "get", "delta-agent", "--models", "--provider", "bogus")
 	if got.code != codeUsage {
 		t.Fatalf("get --provider bogus exit = %d, want %d; stderr=%q", got.code, codeUsage, got.stderr)
 	}
@@ -77,58 +77,57 @@ func TestGetProviderRejectedOnHomeProviderAgent(t *testing.T) {
 	// rejects it as a usage error rather than silently ignoring it.
 	newScenario(t, "", "alpha-cli")
 
-	got := runCLI("get", "alpha-cli", "--provider", "anthropic")
+	got := runCLI("agents", "get", "alpha-cli", "--provider", "anthropic")
 	if got.code != codeUsage {
 		t.Fatalf("get --provider on home-provider agent exit = %d, want %d; stderr=%q", got.code, codeUsage, got.stderr)
 	}
 }
 
-func TestGetProviderRejectedOnFallthroughQuery(t *testing.T) {
-	// A query matching no catalogued agent enters the provider fallthrough, where
-	// --provider is meaningless: reject it as usage rather than silently dropping
-	// it while reporting the models.dev provider.
+func TestGetProviderNameQueryIsNotFound(t *testing.T) {
+	// A query matching no catalogued agent is an exact miss (exit 3) whether or not
+	// --provider is supplied: the fallthrough that once reclassified it as a
+	// models.dev provider is gone.
 	newScenario(t, "")
 
-	got := runCLI("get", "anthropic", "--provider", "openai")
-	if got.code != codeUsage {
-		t.Fatalf("get fallthrough --provider exit = %d, want %d; stderr=%q", got.code, codeUsage, got.stderr)
-	}
-	if !strings.Contains(got.stderr, "not a catalogued agent") {
-		t.Errorf("expected not-a-catalogued-agent error, got %q", got.stderr)
+	got := runCLI("agents", "get", "anthropic", "--provider", "openai")
+	if got.code != codeNotFound {
+		t.Fatalf("provider-name query exit = %d, want %d; stderr=%q", got.code, codeNotFound, got.stderr)
 	}
 }
 
-func TestModelsAgnosticWithoutProviderIsUsage(t *testing.T) {
+func TestModelsAgnosticAgentWithoutProviderIsUsage(t *testing.T) {
 	newScenario(t, "", "delta-agent")
 
-	got := runCLI("models", "delta-agent")
+	got := runCLI("models", "list", "--agent", "delta-agent")
 	if got.code != codeUsage {
-		t.Fatalf("models exit = %d, want %d; stderr=%q", got.code, codeUsage, got.stderr)
+		t.Fatalf("models list --agent exit = %d, want %d; stderr=%q", got.code, codeUsage, got.stderr)
 	}
 	if !strings.Contains(got.stderr, "provider-agnostic") {
 		t.Errorf("expected provider-agnostic error, got %q", got.stderr)
 	}
 }
 
-func TestModelsAgnosticWithProviderLists(t *testing.T) {
+func TestModelsAgnosticAgentWithProviderLists(t *testing.T) {
 	newScenario(t, "", "delta-agent")
 
-	got := runCLI("--json", "models", "delta-agent", "--provider", "anthropic")
+	got := runCLI("--json", "models", "list", "--agent", "delta-agent", "--provider", "anthropic")
 	if got.code != codeOK {
-		t.Fatalf("models --provider exit = %d, stderr=%q", got.code, got.stderr)
+		t.Fatalf("models list --agent --provider exit = %d, stderr=%q", got.code, got.stderr)
 	}
 	rows := got.envelope(t).Data.([]any)
 	if len(rows) == 0 {
-		t.Errorf("models --provider anthropic listed nothing: %s", got.stdout)
+		t.Errorf("models list --agent delta-agent --provider anthropic listed nothing: %s", got.stdout)
 	}
 }
 
-func TestModelsAgnosticUnknownProviderIsUsage(t *testing.T) {
+func TestModelsAgnosticAgentUnknownProviderIsUsage(t *testing.T) {
+	// The agnostic-enrichment role of --provider is validated too: an unknown id is
+	// a usage fault, not a silent empty listing.
 	newScenario(t, "", "delta-agent")
 
-	got := runCLI("models", "delta-agent", "--provider", "bogus")
+	got := runCLI("models", "list", "--agent", "delta-agent", "--provider", "bogus")
 	if got.code != codeUsage {
-		t.Fatalf("models --provider bogus exit = %d, want %d; stderr=%q", got.code, codeUsage, got.stderr)
+		t.Fatalf("models list --agent --provider bogus exit = %d, want %d; stderr=%q", got.code, codeUsage, got.stderr)
 	}
 	if !strings.Contains(got.stderr, "unknown provider") {
 		t.Errorf("expected unknown-provider error, got %q", got.stderr)
@@ -138,9 +137,9 @@ func TestModelsAgnosticUnknownProviderIsUsage(t *testing.T) {
 func TestModelsProviderRejectedOnHomeProviderAgent(t *testing.T) {
 	newScenario(t, "", "alpha-cli")
 
-	got := runCLI("models", "alpha-cli", "--provider", "anthropic")
+	got := runCLI("models", "list", "--agent", "alpha-cli", "--provider", "anthropic")
 	if got.code != codeUsage {
-		t.Fatalf("models --provider on home-provider agent exit = %d, want %d; stderr=%q", got.code, codeUsage, got.stderr)
+		t.Fatalf("models list --agent home-provider --provider exit = %d, want %d; stderr=%q", got.code, codeUsage, got.stderr)
 	}
 }
 
@@ -150,7 +149,7 @@ func TestGetAgnosticSoftPathNotInstalled(t *testing.T) {
 	// fields omitted, and the agnostic warning.
 	newScenario(t, "") // delta binary not installed
 
-	got := runCLI("--json", "get", "delta-agent")
+	got := runCLI("--json", "agents", "get", "delta-agent")
 	if got.code != codeNotFound {
 		t.Fatalf("get exit = %d, want %d; stderr=%q", got.code, codeNotFound, got.stderr)
 	}
@@ -178,7 +177,7 @@ func TestGetAgnosticProviderNotInstalled(t *testing.T) {
 	// and no soft-path warning — the caller already supplied providers.
 	newScenario(t, "") // delta binary not installed
 
-	got := runCLI("--json", "get", "delta-agent", "--provider", "anthropic")
+	got := runCLI("--json", "agents", "get", "delta-agent", "--provider", "anthropic")
 	if got.code != codeNotFound {
 		t.Fatalf("get --provider exit = %d, want %d; stderr=%q", got.code, codeNotFound, got.stderr)
 	}
@@ -203,7 +202,7 @@ func TestGetAgnosticBareProviderKeepsProviderEnvOmitsModels(t *testing.T) {
 	// attached), Models stays omitted per the OR rule.
 	newScenario(t, "", "delta-agent")
 
-	got := runCLI("--json", "get", "delta-agent", "--provider", "anthropic")
+	got := runCLI("--json", "agents", "get", "delta-agent", "--provider", "anthropic")
 	if got.code != codeOK {
 		t.Fatalf("get --provider exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -221,7 +220,7 @@ func TestGetAgnosticNonProviderFieldsStayOffline(t *testing.T) {
 	// catalog alone: no models.dev fetch, no agnostic warning, exit 0.
 	newScenario(t, mustNotFetchModelsServer(t), "delta-agent")
 
-	got := runCLI("--json", "get", "delta-agent", "--fields", "skills_dir")
+	got := runCLI("--json", "agents", "get", "delta-agent", "--fields", "skills_dir")
 	if got.code != codeOK {
 		t.Fatalf("get --fields skills_dir exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -240,7 +239,7 @@ func TestGetAgnosticFieldsProvidersValidatesCallerIds(t *testing.T) {
 	// it with --provider validates the ids rather than echoing them at exit 0.
 	newScenario(t, "", "delta-agent")
 
-	got := runCLI("get", "delta-agent", "--fields", "providers", "--provider", "bogus")
+	got := runCLI("agents", "get", "delta-agent", "--fields", "providers", "--provider", "bogus")
 	if got.code != codeUsage {
 		t.Fatalf("get --fields providers --provider bogus exit = %d, want %d; stderr=%q", got.code, codeUsage, got.stderr)
 	}
@@ -248,7 +247,7 @@ func TestGetAgnosticFieldsProvidersValidatesCallerIds(t *testing.T) {
 		t.Errorf("expected unknown-provider error, got %q", got.stderr)
 	}
 
-	valid := runCLI("--json", "get", "delta-agent", "--fields", "providers", "--provider", "anthropic")
+	valid := runCLI("--json", "agents", "get", "delta-agent", "--fields", "providers", "--provider", "anthropic")
 	if valid.code != codeOK {
 		t.Fatalf("get --fields providers --provider anthropic exit = %d, stderr=%q", valid.code, valid.stderr)
 	}
@@ -265,7 +264,7 @@ func TestGetAgnosticNonProviderFieldsWithProviderStaysOffline(t *testing.T) {
 	// needs validating.
 	newScenario(t, mustNotFetchModelsServer(t), "delta-agent")
 
-	got := runCLI("--json", "get", "delta-agent", "--fields", "skills_dir", "--provider", "anthropic")
+	got := runCLI("--json", "agents", "get", "delta-agent", "--fields", "skills_dir", "--provider", "anthropic")
 	if got.code != codeOK {
 		t.Fatalf("get --fields skills_dir --provider exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -275,43 +274,17 @@ func TestGetAgnosticNonProviderFieldsWithProviderStaysOffline(t *testing.T) {
 	}
 }
 
-func TestModelsAgnosticDuplicateProviderResolvesUnique(t *testing.T) {
-	// A repeated --provider id is deduplicated: the query resolves uniquely
-	// instead of failing ambiguous against its own duplicate, and the listing
-	// carries each model once.
+func TestModelsListDuplicateProviderDeduplicates(t *testing.T) {
+	// A repeated --provider id is deduplicated by flattenProviders, so the scoped
+	// listing carries each model once rather than twice.
 	newScenario(t, "", "delta-agent")
 
-	got := runCLI("--json", "models", "delta-agent", "sonnet", "--provider", "anthropic,anthropic")
-	if got.code != codeOK {
-		t.Fatalf("models query with duplicate --provider exit = %d, stderr=%q", got.code, got.stderr)
-	}
-	data := got.envelope(t).Data.(map[string]any)
-	if data["id"] != "claude-sonnet" {
-		t.Errorf("resolved id = %v, want claude-sonnet", data["id"])
-	}
-
-	list := runCLI("--json", "models", "delta-agent", "--provider", "anthropic,anthropic")
+	list := runCLI("--json", "models", "list", "--agent", "delta-agent", "--provider", "anthropic,anthropic")
 	if list.code != codeOK {
 		t.Fatalf("models list with duplicate --provider exit = %d, stderr=%q", list.code, list.stderr)
 	}
 	if rows := list.envelope(t).Data.([]any); len(rows) != 1 {
 		t.Errorf("models rows = %d, want 1 (deduplicated)", len(rows))
-	}
-}
-
-func TestModelsAgnosticQueryWithProvider(t *testing.T) {
-	newScenario(t, "", "delta-agent")
-
-	got := runCLI("--json", "models", "delta-agent", "sonnet", "--provider", "anthropic")
-	if got.code != codeOK {
-		t.Fatalf("models query --provider exit = %d, stderr=%q", got.code, got.stderr)
-	}
-	data := got.envelope(t).Data.(map[string]any)
-	if data["id"] != "claude-sonnet" || data["provider"] != "anthropic" {
-		t.Errorf("resolved id/provider = %v/%v, want claude-sonnet/anthropic", data["id"], data["provider"])
-	}
-	if data["canonical_id"] != "anthropic/claude-sonnet" {
-		t.Errorf("canonical_id = %v, want anthropic/claude-sonnet", data["canonical_id"])
 	}
 }
 
@@ -321,7 +294,7 @@ func TestGetAgnosticProviderDegradesWithWarningWhenUnreachable(t *testing.T) {
 	// omitted, and a warning so the silence reads as an outage.
 	newScenario(t, closedModelsServer(t), "delta-agent")
 
-	got := runCLI("--json", "get", "delta-agent", "--provider", "anthropic")
+	got := runCLI("--json", "agents", "get", "delta-agent", "--provider", "anthropic")
 	if got.code != codeOK {
 		t.Fatalf("get --provider degrade exit = %d, want 0; stderr=%q", got.code, got.stderr)
 	}
@@ -342,7 +315,7 @@ func TestListAgnosticProviderShowsCount(t *testing.T) {
 	// model array in JSON, a count in text, not the null/- marker.
 	newScenario(t, "", "delta-agent")
 
-	got := runCLI("--json", "list", "--provider", "anthropic")
+	got := runCLI("--json", "agents", "list", "--provider", "anthropic")
 	if got.code != codeOK {
 		t.Fatalf("list --provider exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -362,7 +335,7 @@ func TestListAgnosticUnknownProviderIsUsage(t *testing.T) {
 	// missing-provider case, which soft-skips enrichment and keeps listing.
 	newScenario(t, "", "delta-agent")
 
-	got := runCLI("list", "--provider", "bogus")
+	got := runCLI("agents", "list", "--provider", "bogus")
 	if got.code != codeUsage {
 		t.Fatalf("list --provider bogus exit = %d, want %d; stderr=%q", got.code, codeUsage, got.stderr)
 	}
@@ -377,7 +350,7 @@ func TestListUnknownProviderIsUsageWithoutAgnosticInstalled(t *testing.T) {
 	// not depend on which binaries happen to be present.
 	newScenario(t, "", "alpha-cli") // only a home-provider agent installed; delta absent
 
-	got := runCLI("list", "--provider", "bogus")
+	got := runCLI("agents", "list", "--provider", "bogus")
 	if got.code != codeUsage {
 		t.Fatalf("list --provider bogus exit = %d, want %d; stderr=%q", got.code, codeUsage, got.stderr)
 	}

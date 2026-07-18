@@ -628,12 +628,12 @@ composite is used only as a lookup probe — never returned as-is and never writ
 map) and the library never surfaces an identifier that does not exist in models.dev. The
 provider id is returned so a caller holding only the Model — which carries no provider
 field — still has authoritative provider context without parsing the opaque canonical id.
-start calls this rather than maintaining an alias map. The agentdex CLI surfaces the same
-resolution via `agentdex models <agent> <query>` (selector matching), so it is reachable
-without importing the library. The CLI exposes the canonical id as a distinct
-`canonical_id` output field, shown only when non-empty; the short `Model.ID` stays the
-`id` field, so the CLI and library never disagree on what `id` means. Fuzzy matching is an
-input convenience only; how start stores `default_model` is settled in the start migration.
+start calls this rather than maintaining an alias map. `ResolveModel` remains a public
+library API; the agentdex CLI does not surface it. CLI model retrieval is the exact
+`models get <provider-id/model-id>` fetch, not a fuzzy query. The CLI exposes the
+canonical id as a distinct `canonical_id` output field, shown only when non-empty; the
+short `Model.ID` stays the `id` field, so the CLI and library never disagree on what `id`
+means. How start stores `default_model` is settled in the start migration.
 
 ### Provider env reporting
 
@@ -673,8 +673,9 @@ per-provider verdicts:
 | yes | all present | fully supported agent | report agent, provider-env by default, fill Models only when demanded, exit 0 |
 | yes | some present | partially supported: at least one provider is present, at least one is absent | report agent, provider-env and (when demanded) Models from the present providers, emit a warning naming the absent provider(s), exit 0; the absent providers are flagged per provider by catalog validation and start doctor |
 | yes | none present | catalog agent whose every provider is absent from models.dev: a catalog data error | report agent, emit error, exit 78; also flagged by catalog validation and start doctor |
-| no | query matches a models.dev provider | not a catalog agent, but the query names a provider models.dev knows | report that provider's identity, labelled as provider data not an agent, note that install details are unavailable because it is not catalogued, exit 3; include the provider's model list only with `--models`; flagged by catalog validation and start doctor as a coverage gap |
-| no | query matches no models.dev provider | unknown | informational: no such agent, likely a typo, list valid catalog ids, exit 2 |
+
+An id that names no catalogued agent is a plain exact miss: not-found (exit 3), with no
+provider fallthrough. Provider discovery lives in `providers list` and `providers get`.
 
 The split is deliberate: get is detection and enrichment, not validation, so a
 working multi-provider agent stays at exit 0 even when one provider is missing
@@ -686,143 +687,45 @@ rows are the special cases of this rule for single-provider agents.
 Here a provider absent from models.dev means it is genuinely missing from a
 reachable models.dev. A models.dev that cannot be reached (no network, no cache) is
 a different situation outside this table: get degrades with a warning and exits 0,
-while a model-centric command fails transient (exit 75). See CLI get behaviour.
-
-The library returns `ErrAgentUnknown` whenever a query matches no catalog agent
-(the two no rows). The CLI then matches the query against models.dev provider ids and
-names (exact, then unique substring or prefix) to choose between the no/yes path
-(report that provider's identity and, with `--models`, its model list, exit 3) and
-the no/no path (exit 2). Model ids are not matched here: an agent maps onto models.dev
-only through a provider, so the provider axis is the only one an uncatalogued agent
-could resolve against, and the data reported is that provider's, not the uncatalogued
-agent's models. An agent's name rarely equals a provider id, so the no/yes path fires
-mainly when the query itself names a provider; it is a discovery aid, not a claim
-that the query is a known agent.
+while a model-centric command fails transient (exit 75).
 
 ## CLI
 
-The CLI is a thin wrapper over the library. Single domain, so the noun is omitted.
+The CLI is a thin wrapper over the library, organised around its three data
+entities — agents, providers, and models. Each is reached the same way: a noun
+group with two verbs, `list` to browse and `get` to fetch by exact id.
 
 ### Commands
 
 ```
-agentdex list                    detected agents, table by default
-agentdex get <agent>             detail for one agent (aliases: view, show)
-agentdex models <agent> [query]  models available to the agent; query fuzzy-matches
-agentdex providers [filter]      models.dev providers usable with --provider; filter narrows
-agentdex refresh [target]        force refresh caches: catalog | models | all
-agentdex skills <agent> [name]   skills in the agent's skills dir (read-only)
+agentdex agents list [filter]               detected agents, table by default
+agentdex agents get <id>                    detail for one agent (aliases: view, show)
+agentdex providers list [filter]            models.dev providers usable with --provider
+agentdex providers get <id>                 detail for one provider
+agentdex models list [filter]               models across providers; --provider/--agent scope
+agentdex models get <provider-id/model-id>  detail for one model
+agentdex refresh [target]                   force refresh caches: catalog | models | all
 agentdex version
 agentdex completion
 ```
 
-Selector matching:
+Two verb rules are shared by every noun. `list` is a browse: an optional filter
+narrows the set by case-insensitive substring over id and name, where several
+matches list all and a zero-match is an empty listing at exit 0. `get` is an exact
+fetch by the entity's canonical id — the catalog kebab-case key for an agent, the
+models.dev provider id for a provider, the composite `provider-id/model-id` for a
+model — where a miss is not-found at exit 3. There is no none/one/many selector and
+no `providers` exception: discovery is the `list` filter, identity is the `get` id.
+Any temptation to make `get` fuzzy reintroduces the ambiguity the two rules remove.
 
-Every positional selector — `<agent>`, the model `[query]`, the skill `[name]` —
-resolves by the same rule against its relevant set (catalog agents, the agent's
-models, the skills found in the dir): exact match first (id, then case-insensitive
-name), then a unique substring or prefix match. The `providers [filter]` positional
-is the one exception, carved out below. The outcome drives behaviour:
+Invoking a noun group with no verb (`agentdex agents`) is a usage fault (exit 2). In
+text mode it prints the group help so the verbs are discoverable; under `--json` it
+emits the error envelope alone, so stdout stays parseable.
 
-- none matched: report that nothing matched and exit 3
-- one matched: act on that single match
-- two or more matched: list the candidates so the user can refine, and exit 3
-
-The `providers [filter]` positional does not follow this rule. It is a browse
-narrowing, not a selector: it filters the provider list by case-insensitive
-substring over id and name, so a filter matching several providers lists all of
-them (no ambiguity is reported) and a filter matching none is a normal empty
-listing at exit 0, not a not-found at exit 3.
-
-This one rule governs every selector (providers aside), so `agentdex models
-<agent> sonnet` resolving to a single model is the CLI surface of the library
-`ResolveModel`. The agent
-selector adds one distinction handled below: a query that matches a known agent
-which is simply not installed is reported differently from a query that matches no
-known agent (see Output and exit codes).
-
-Behaviour:
-
-- `list` enriches every agent with its models.dev model count, shown in the MODELS
-  column between PROVIDERS and BIN. Enrichment is served from the warm cache with
-  no network and degrades to a zero count when models.dev is unreachable, so the
-  listing never fails on it; an unreachable-and-uncached models.dev is warned so the
-  zero reads as unavailable rather than a genuine empty catalog. Malformed models.dev data (`ErrModelsSchema`) is the
-  one fault that would otherwise be fatal, but because enrichment is auxiliary to
-  the listing, `list` re-detects without it and warns rather than exiting: the
-  drift stays loud (a warning, not a silent blank) without killing the command.
-  This is the deliberate exception to the schema-drift-is-fatal rule that `get` and
-  `models` follow, where models are central. An agnostic agent's count is
-  not-applicable without `--provider`: the MODELS cell reads `-` and JSON carries
-  `models: null`, distinct from the `[]`/`0` degrade shape; with `--provider` the
-  caller-supplied set is enriched like a home-provider count (an unknown id is a
-  usage error, exit 2). `--all` additionally lists catalogued agents whose
-  binary was not found: detected agents first, then the missing tail by id, with
-  `missing` in the BIN column and `-` in VERSION (the library's IncludeMissing
-  option; in JSON these rows carry `found: false` with a blank bin). The BIN column
-  is part of the default list columns, last because it is the widest.
-- Model listings (get's Models section and `models`) render newest release first
-  (descending release_date, ties by id) and carry a muted footer naming the
-  pricing unit: `Prices in USD per 1M tokens (models.dev)`. Both are text-surface
-  presentation; JSON model arrays follow the same order but carry raw numbers.
-- `get <agent>` reports provider-env presence by default for catalog agents (it
-  needs only the providers map). Models fill is opt-in: pass `--models`, or a
-  non-empty `--fields` selection that includes `models`. Empty `--fields` is
-  unfiltered and does not demand Models. When detection succeeds but models.dev is
-  unreachable with no cache, get degrades: it prints the detected agent, omits the
-  Models and provider-env sections, emits a warning that model enrichment was
-  unavailable, and exits 0. Enrichment is not the point of get, so its absence does
-  not fail the command. Provider fallthrough (query matches no catalog agent but a
-  models.dev provider) includes the model list only with `--models`; `--provider`
-  is rejected as a usage error there, since no catalogued agent exists to apply it
-  to.
-- `get` and `models` accept `--provider` (repeatable or csv models.dev ids) to
-  supply the enrichment set for an agnostic agent; on a home-provider agent
-  `--provider` is rejected as a usage error (the catalog is authoritative), while
-  `list` accepts it and applies it only to agnostic rows. An unfiltered
-  `get <agnostic>` without `--provider` and without `--models` takes the soft path:
-  outside facts only, the `providers`, `provider_env`, and `models` fields omitted,
-  a warning naming the agent as provider-agnostic and how to enrich, exit 0 when
-  found (the usual exit 3 with the same payload when not installed). Any demand on
-  those fields (`--models`, or `--fields` naming one) without `--provider` is
-  `ErrProvidersRequired`, exit 2; an id that is not a models.dev provider is
-  `ErrUnknownProvider`, exit 2. With `--provider`, a selection naming any of those
-  fields validates the ids against a reachable models.dev — `providers` on an
-  agnostic agent is caller input, not catalog truth — while a selection naming
-  none of them stays offline. Two paths echo the caller ids without validation:
-  a not-installed agent (exit 3; no client is attached until the agent is found)
-  and the unreachable-and-uncached degrade (exit 0 with the outage warning), where
-  validation shares the degrade rather than failing. Agnostic gets never enter
-  the coverage rollup.
-- `models <agent> [query]` lists the agent's provider models with pricing, limits,
-  and capabilities; an agnostic agent requires `--provider`, validated before
-  listing or resolving. With a `query` it applies selector matching: a single match
-  prints that model (use `--json` or `--fields canonical_id` to script the canonical
-  id, shown only when the model has a real models.dev agnostic id); multiple matches
-  list the candidates.
-- `providers [filter]` lists the models.dev providers agentdex can enrich against,
-  so the ids usable with `--provider` are discoverable from agentdex itself. It
-  loads no agent catalog and takes no agent argument. Columns are ID, NAME, ENV, and
-  MODELS: ENV lists each provider's API-key variable names, sorted, a set variable
-  suffixed `(set)` and an unset one left bare, so a bare name means unset — a
-  deliberately terser divergence from the symmetric `(set)/(unset)` markers `get`
-  shows, chosen to keep the wide listing legible. MODELS is the provider's model
-  count over the array carried in the structured `models` field, which stays
-  array-typed like `list` and `get` so `.data[].models` reads uniformly. Env-var
-  presence is read at the boundary through `os.LookupEnv` and also exposed as the
-  structured `present` map (variable to boolean) so scripts read presence without
-  parsing the `(set)` suffix. The optional filter narrows by case-insensitive
-  substring over id and name and is a browse narrowing, not a selector (see Selector
-  matching): several matches list all, no match is an empty listing at exit 0. A
-  models.dev outage with no cache leaves no result and is transient (exit 75); gross
-  models.dev structural drift is a data fault (exit 78), never transient.
-- `refresh` forces a cache refresh for the catalog, models.dev, or both.
-- `skills <agent> [name]` is read-only discovery. With no name it lists SKILL.md
-  entries in the agent's resolved skills directory. With a name it applies selector
-  matching: a single match prints that SKILL.md body to stdout, multiple matches
-  list the candidates. It never writes. Skill install, uninstall, and management
-  stay in start. This command is a separate project (see Phasing and separate
-  projects); its shape is provisional and may be omitted from the core build.
+Per-command behaviour lives in the code and `--help`, not here. The home-provider
+coverage rollup that drives `agents get` reporting is described under Catalog and
+models.dev coverage. The skills command is a separate, provisional project (see
+Phasing and separate projects) and is not part of this surface.
 
 ### Global flags
 
@@ -840,28 +743,13 @@ Behaviour:
 
 - Text by default; JSON envelope under `--json` with the standard
   status/data/error/warnings shape.
-- `--fields` selection on list, get, and models.
+- `--fields` selection on every list and get command.
 - Exit codes follow the start CLI taxonomy: 0 success, 1 failure, 2 usage,
   3 not found, 4 permission, 5 conflict, 75 transient, 78 config.
-- `get <agent>` reporting follows the catalog and models.dev coverage table:
-  fully supported is exit 0; a catalog agent with at least one provider present in
-  models.dev stays exit 0 and warns about any absent provider; a catalog agent whose
-  every provider is absent from a reachable models.dev is a catalog data error,
-  exit 78; a query that is not a catalog agent but names a models.dev provider reports
-  that provider's identity (and its model list only with `--models`), labelled as
-  provider data, exit 3; a query that matches neither a catalog agent nor a
-  models.dev provider is genuinely unknown, exit 2 (`ErrAgentUnknown`). A known
-  catalog agent that is not installed is not
-  found, exit 3, but still renders the catalogued detail first (resolved config
-  paths, providers, homepage, bin reading `missing`); under --json the envelope
-  carries both the data and the error. In get's text detail the bin line always
-  states presence — the path with `(found)`, or `missing` — mirroring provider
-  env's `(set)`/`(unset)`.
 - Transient exit 75 applies when a command has no usable result at all: the catalog
-  cannot be loaded, or a model-centric command (`models`) cannot reach models.dev
-  with no cache. A `get` whose detection already succeeded degrades with a warning
-  and exits 0 instead (see CLI get behaviour). A malformed config.cue returns
-  exit 78.
+  cannot be loaded, or a model-centric command cannot reach models.dev with no
+  cache. An `agents get` whose detection already succeeded degrades with a warning
+  and exits 0 instead. A malformed config.cue returns exit 78.
 
 ## Configuration
 
@@ -1088,10 +976,10 @@ start and library project files) rather than landing everything in one change.
   CUE Central Registry, fetched at runtime, cached 24h, not embedded.
 - models.dev is consumed as the static catalog.json, cached 24h, merged across the
   provider and provider-agnostic maps. Go types mirror the real zod schema.
-- Fuzzy model resolution lives in agentdex. start drops its alias map; how start
-  stores default_model is settled by the start migration. The agentdex CLI surfaces
-  resolution through selector matching on `models <agent> <query>`; there is no
-  separate resolve command.
+- Fuzzy model resolution lives in agentdex as the public `ResolveModel` library API;
+  start drops its alias map and how it stores default_model is settled by the start
+  migration. The agentdex CLI does not surface `ResolveModel`: CLI model retrieval is
+  the exact `models get <provider-id/model-id>` fetch, not a fuzzy query.
 - Model identity is models.dev's own provider-agnostic id, never a constructed string.
   The merge joins agnostic-first over real path-style ids; ResolveModel returns the real
   provider id plus the canonical agnostic id when one exists (empty otherwise), using the
@@ -1099,19 +987,16 @@ start and library project files) rather than landing everything in one change.
 - start/library #Agent keeps a static `bin` for offline launch with no detection on
   the hot path. start verifies it (and default_model) against agentdex at install
   and via start doctor. Config and skills paths leave start/library entirely.
-- CLI selector matching is one rule (none/one/many) applied to `<agent>`, model
-  `[query]`, and skill `[name]`. The `providers [filter]` positional is exempt: it
-  is a browse narrowing, so a filter matching none is an empty listing at exit 0,
-  not a not-found at exit 3.
-- Catalog and models.dev are cross-referenced to drive get exit codes, evaluated per
-  provider: all providers present 0, some present 0 with a warning naming the absent
-  provider(s), every provider absent 78 (catalog data error), not a catalog agent but
-  the query names a models.dev provider 3 (reports that provider's identity and, with
-  `--models`, its model list, labelled as provider data), neither a catalog agent nor
-  a models.dev provider 2. The uncatalogued match is by provider id and name only,
-  never model id; an agent maps onto models.dev through its provider, so the provider
-  axis is the only one an uncatalogued query can resolve against. get degrades to exit
-  0 with a warning when detection succeeds but models.dev is unreachable.
+- CLI selection is two verb rules shared by every noun: `list` is a browse substring
+  narrowing (tolerant of zero and many, an empty listing at exit 0), `get` is an exact
+  canonical-id fetch (a miss is not-found at exit 3). There is no none/one/many
+  selector and no `providers` exception.
+- Catalog and models.dev are cross-referenced to drive `agents get` exit codes,
+  evaluated per provider for home-provider agents: all providers present 0, some
+  present 0 with a warning naming the absent provider(s), every provider absent 78
+  (catalog data error). An id that names no catalogued agent is not-found (exit 3),
+  with no provider fallthrough. get degrades to exit 0 with a warning when detection
+  succeeds but models.dev is unreachable.
 - The catalog id is the map key; #KnownAgent has no id field. The loader sets the
   Go ID from the key.
 - --json is long form only; no -j.

@@ -72,14 +72,49 @@ func NewRootCommand() *cobra.Command {
 	// cobra's help and completion under Additional Commands.
 	root.AddGroup(&cobra.Group{ID: groupCore, Title: "Core Commands:"})
 	root.AddCommand(
-		a.newListCmd(),
-		a.newGetCmd(),
-		a.newModelsCmd(),
+		a.newAgentsCmd(),
 		a.newProvidersCmd(),
+		a.newModelsCmd(),
 		a.newRefreshCmd(),
 		a.newVersionCmd(),
 	)
 	return root
+}
+
+// newNounCmd builds a data-entity noun group carrying the two shared verbs, list
+// and get. The group itself is not a runnable operation: a bare invocation, or an
+// unrecognised verb, routes to the shared usage fault via nounUsage. The singular
+// alias is a pure synonym for the plural and selects the same group.
+func (a *app) newNounCmd(use, alias, short string, subs ...*cobra.Command) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:     use,
+		Aliases: []string{alias},
+		GroupID: groupCore,
+		Short:   short,
+		// ArbitraryArgs routes a bare invocation or an unknown verb to RunE (the
+		// shared usage fault) rather than cobra's terse error, so the JSON envelope
+		// and exit code stay under our control.
+		Args: cobra.ArbitraryArgs,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.nounUsage(cmd, args)
+		},
+	}
+	cmd.AddCommand(subs...)
+	return cmd
+}
+
+// nounUsage is the shared usage fault for a noun group reached without a valid
+// verb. In text mode it prints the group help to stdout so the verbs are
+// discoverable; under --json it prints no help, so the error envelope sits alone on
+// stdout and stays parseable. Either way it exits 2 through the usage path.
+func (a *app) nounUsage(cmd *cobra.Command, args []string) error {
+	if !a.jsonOut {
+		_ = cmd.Help()
+	}
+	if len(args) > 0 {
+		return a.usage(cmd, fmt.Errorf("unknown %s subcommand %q: use list or get", cmd.Name(), args[0]))
+	}
+	return a.usage(cmd, fmt.Errorf("%s requires a subcommand: list or get", cmd.Name()))
 }
 
 // Execute runs the command tree and returns the process exit code. A command's

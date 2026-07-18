@@ -10,120 +10,124 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/start-cli/agentdex"
-	"github.com/start-cli/agentdex/internal/match"
+	"github.com/start-cli/agentdex/internal/config"
 	"github.com/start-cli/agentdex/modelsdev"
 )
 
+// newModelsCmd is the models noun group: a browse verb (list) over models across
+// providers and an exact fetch verb (get) by composite provider-id/model-id.
 func (a *app) newModelsCmd() *cobra.Command {
+	return a.newNounCmd(
+		"models", "model", "Models available from models.dev providers",
+		a.newModelsListCmd(),
+		a.newModelsGetCmd(),
+	)
+}
+
+func (a *app) newModelsListCmd() *cobra.Command {
 	var (
 		fields    []string
 		providers []string
+		agent     string
 	)
 	cmd := &cobra.Command{
-		Use:     "models <agent> [query]",
-		GroupID: groupCore,
-		Short:   "List the models available to an agent",
-		Long: "List the provider models available to an agent, with pricing, limits, and " +
-			"capabilities. With a query, fuzzy-match a single model; an ambiguous query lists candidates. " +
-			"Provider-agnostic agents require --provider with one or more models.dev provider ids.",
-		// MaximumNArgs, not RangeArgs(1, 2): the missing-agent case is handled in
-		// RunE so it reports through the shared usage path — a helpful message that
-		// carries the JSON envelope — rather than cobra's terse arg-count error.
-		Args: cobra.MaximumNArgs(2),
+		Use:   "list [filter]",
+		Short: "List models across providers",
+		Long: "List models across models.dev providers, with pricing, limits, and capabilities, " +
+			"newest release first. With no scope it lists every provider's models; --provider scopes " +
+			"to the given models.dev provider ids and --agent scopes to a catalogued agent's " +
+			"providers. The optional filter narrows the listing to models whose id or name contains " +
+			"it (case-insensitive) and composes with any scope. A provider-agnostic --agent requires " +
+			"--provider; a home-provider --agent rejects it.",
+		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if len(args) == 0 {
-				return a.usage(cmd, errors.New(`models requires an agent argument; run "agentdex list --all" to see agent ids`))
-			}
 			cfg, err := a.requireConfig()
 			if err != nil {
 				return a.failConfig(cmd, err)
 			}
-
-			cat, stale, err := agentdex.LoadCatalog(cmd.Context(), cfg.CatalogOptions(cfg.CatalogTTL)...)
-			if err != nil {
-				return a.fail(cmd, codeFor(err), err)
+			filter := ""
+			if len(args) == 1 {
+				filter = args[0]
 			}
-			var warnings []string
-			if stale {
-				warnings = append(warnings, "agent catalog is stale: re-resolution failed, using the last resolved version")
-			}
-
-			outcome, id, candidates := matchAgent(cat, args[0])
-			switch outcome {
-			case match.None: // an agent query that matches nothing is not found here
-				return a.fail(cmd, codeNotFound, fmt.Errorf("no agent matches %q; valid ids: %s", args[0], strings.Join(catalogIDs(cat), ", ")), warnings...)
-			case match.Ambiguous:
-				return a.fail(cmd, codeNotFound, fmt.Errorf("ambiguous agent %q: matches %s", args[0], strings.Join(candidates, ", ")), warnings...)
-			}
-			a.log.Debug("models resolved agent", "id", id)
-
-			ka := cat.Agents[id]
-			callerProviders := flattenProviders(providers)
-			if !ka.Agnostic && len(callerProviders) > 0 {
-				return a.fail(cmd, codeUsage, fmt.Errorf("agent %q has catalog providers; --provider is only valid for provider-agnostic agents", id), warnings...)
-			}
-			providerSet := ka.Provider
-			if ka.Agnostic {
-				if len(callerProviders) == 0 {
-					return a.fail(cmd, codeUsage, fmt.Errorf("%w: %q is provider-agnostic; supply --provider with models.dev provider ids", agentdex.ErrProvidersRequired, id), warnings...)
-				}
-				providerSet = callerProviders
-			}
-
 			client := cfg.ModelsClient()
-			if ka.Agnostic {
-				if err := agentdex.ValidateCallerProviders(cmd.Context(), client, providerSet); err != nil {
-					return a.fail(cmd, modelsCode(err), err, warnings...)
-				}
+			providerSet, warnings, ferr := a.resolveModelsScope(cmd, cfg, client, agent, flattenProviders(providers))
+			if ferr != nil {
+				return ferr
 			}
-			if len(args) == 2 {
-				return a.modelsOne(cmd, cat, id, args[1], client, providerSet, fields, warnings)
-			}
-			return a.modelsList(cmd, providerSet, client, fields, warnings)
+			return a.modelsList(cmd, providerSet, client, filter, fields, warnings)
 		},
 	}
 	registerFieldsFlag(cmd, &fields)
-	cmd.Flags().StringSliceVar(&providers, "provider", nil, "models.dev provider ids for agnostic agents (repeatable or csv)")
+	cmd.Flags().StringSliceVar(&providers, "provider", nil, "Scope to these models.dev provider ids (repeatable or csv)")
+	cmd.Flags().StringVar(&agent, "agent", "", "Scope to the providers of this catalogued agent id")
 	addFieldsHelpSection(cmd, modelFieldSet)
 	return cmd
 }
 
-// modelsOne resolves a single model query through the library and reports it,
-// exposing the canonical id when the model has a real models.dev agnostic entry.
-func (a *app) modelsOne(cmd *cobra.Command, cat *agentdex.Catalog, id, query string, client *modelsdev.Client, providers, fields, warnings []string) error {
-	m, providerID, canonicalID, err := cat.ResolveModel(cmd.Context(), id, query, client, providers)
-	if err != nil {
-		return a.fail(cmd, modelsCode(err), err, warnings...)
-	}
-	a.log.Debug("models resolved query", "id", id, "model", m.ID, "provider", providerID, "canonical", canonicalID)
-
-	r := modelRecord(m, providerID, canonicalID)
-	fs, err := r.resolve(fields)
-	if err != nil {
-		return a.usage(cmd, err)
-	}
-	return a.ok(cmd, jsonObject(fs), warnings, func(w io.Writer) {
-		if len(fields) > 0 {
-			// --fields is the scripting surface: bare values, no footer.
-			renderFields(w, fs)
-			return
+// resolveModelsScope resolves the provider set the listing spans from the --agent
+// and --provider scopes, validating every caller-supplied provider id against a
+// reachable models.dev in both roles it plays — the standalone direct scope and the
+// enrichment set for an agnostic --agent — so an unknown id is a usage fault, never
+// a silent empty listing. It returns any stale-catalog warnings alongside the set.
+// A non-nil error is already rendered (an *exitError), so the caller returns it
+// verbatim.
+func (a *app) resolveModelsScope(cmd *cobra.Command, cfg *config.Config, client *modelsdev.Client, agentID string, callerProviders []string) ([]string, []string, error) {
+	ctx := cmd.Context()
+	if agentID != "" {
+		cat, stale, err := agentdex.LoadCatalog(ctx, cfg.CatalogOptions(cfg.CatalogTTL)...)
+		if err != nil {
+			return nil, nil, a.fail(cmd, codeFor(err), err)
 		}
-		fmt.Fprintln(w)
-		renderDetail(w, fs)
-		renderPriceFooter(w, modelFieldSet.all)
-	})
+		var warnings []string
+		if stale {
+			warnings = append(warnings, staleCatalogWarning)
+		}
+		ka, ok := cat.Agents[agentID]
+		if !ok {
+			return nil, nil, a.fail(cmd, codeNotFound, fmt.Errorf("no agent %q; run \"agentdex agents list --all\" to see agent ids", agentID), warnings...)
+		}
+		if ka.Agnostic {
+			if len(callerProviders) == 0 {
+				return nil, nil, a.fail(cmd, codeUsage, fmt.Errorf("%w: %q is provider-agnostic; supply --provider with models.dev provider ids", agentdex.ErrProvidersRequired, agentID), warnings...)
+			}
+			if err := agentdex.ValidateCallerProviders(ctx, client, callerProviders); err != nil {
+				return nil, nil, a.fail(cmd, modelsCode(err), err, warnings...)
+			}
+			return callerProviders, warnings, nil
+		}
+		if len(callerProviders) > 0 {
+			return nil, nil, a.fail(cmd, codeUsage, fmt.Errorf("agent %q has catalog providers; --provider is only valid for provider-agnostic agents", agentID), warnings...)
+		}
+		return ka.Provider, warnings, nil
+	}
+
+	if len(callerProviders) > 0 {
+		if err := agentdex.ValidateCallerProviders(ctx, client, callerProviders); err != nil {
+			return nil, nil, a.fail(cmd, modelsCode(err), err)
+		}
+		return callerProviders, nil, nil
+	}
+
+	// No scope: list across every provider models.dev knows.
+	cat, err := client.Catalog(ctx)
+	if err != nil {
+		return nil, nil, a.fail(cmd, modelsCode(err), err)
+	}
+	return sortedKeys(cat.Providers), nil, nil
 }
 
-// modelsList reports every model the agent's providers offer. A provider absent
-// from a reachable models.dev contributes nothing; an outage with no cache is
-// transient for this model-centric command.
-func (a *app) modelsList(cmd *cobra.Command, providers []string, client *modelsdev.Client, fields, warnings []string) error {
+// modelsList reports every model the scoped providers offer, narrowed by the
+// browse filter and ordered newest release first. A provider absent from a
+// reachable models.dev contributes nothing; an outage with no cache is transient
+// for this model-centric command.
+func (a *app) modelsList(cmd *cobra.Command, providers []string, client *modelsdev.Client, filter string, fields, warnings []string) error {
 	ctx := cmd.Context()
 	agnostic, err := client.Catalog(ctx)
 	if err != nil {
 		return a.fail(cmd, modelsCode(err), err, warnings...)
 	}
 
+	needle := strings.ToLower(filter)
 	// Collect first, then order newest release first across all providers; the
 	// records are built from the sorted listing so text and JSON agree.
 	type entry struct {
@@ -142,12 +146,16 @@ func (a *app) modelsList(cmd *cobra.Command, providers []string, client *modelsd
 			continue
 		}
 		for _, key := range sortedKeys(p.Models) {
+			m := p.Models[key]
+			if needle != "" && !matchesFilter(m.ID, m.Name, needle) {
+				continue
+			}
 			composite := pid + "/" + key
 			canonical := ""
 			if _, ok := agnostic.Models[composite]; ok {
 				canonical = composite
 			}
-			entries = append(entries, entry{m: p.Models[key], pid: pid, canonical: canonical})
+			entries = append(entries, entry{m: m, pid: pid, canonical: canonical})
 		}
 	}
 	sort.SliceStable(entries, func(i, j int) bool { return newerModel(entries[i].m, entries[j].m) })
@@ -175,14 +183,87 @@ func (a *app) modelsList(cmd *cobra.Command, providers []string, client *modelsd
 	})
 }
 
-// modelsCode classifies a models-command failure. A no-match or ambiguous query
-// is not-found; caller/usage faults (missing or unknown providers) are usage;
-// recognisable schema drift is a data fault; anything else on this model-centric
-// command is a models.dev outage, hence transient.
+func (a *app) newModelsGetCmd() *cobra.Command {
+	var fields []string
+	cmd := &cobra.Command{
+		Use:     "get <provider-id/model-id>",
+		Aliases: []string{"view", "show"},
+		Short:   "Show detail for one model",
+		Long: "Show detail for one model, selected exactly by its composite provider-id/model-id " +
+			"(for example anthropic/claude-opus-4-5). The composite splits on the first slash: the " +
+			"prefix is the provider id and the whole remainder is the model key, which may itself " +
+			"contain slashes. A value with no slash is a usage error; an unknown provider or model " +
+			"is not-found (exit 3).",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			cfg, err := a.requireConfig()
+			if err != nil {
+				return a.failConfig(cmd, err)
+			}
+			return a.modelsGet(cmd, cfg.ModelsClient(), args[0], fields)
+		},
+	}
+	registerFieldsFlag(cmd, &fields)
+	addFieldsHelpSection(cmd, modelFieldSet)
+	return cmd
+}
+
+// modelsGet fetches one model by its composite id, composed in the CLI from
+// modelsdev.Client.Provider plus a map lookup rather than a library API. The
+// composite splits on the first slash only — a models.dev provider id never
+// contains a slash, while a model key may — so the prefix is the provider id and
+// the whole remainder is the model key. canonical_id is computed from the full
+// input composite as the agnostic-catalog lookup key.
+func (a *app) modelsGet(cmd *cobra.Command, client *modelsdev.Client, composite string, fields []string) error {
+	pid, key, ok := strings.Cut(composite, "/")
+	if !ok {
+		return a.usage(cmd, fmt.Errorf("model id %q must be provider-id/model-id; run \"agentdex models list\" to see model ids", composite))
+	}
+	ctx := cmd.Context()
+	p, found, err := client.Provider(ctx, pid)
+	if err != nil {
+		return a.fail(cmd, modelsCode(err), err)
+	}
+	if !found {
+		return a.fail(cmd, codeNotFound, fmt.Errorf("no model %q: unknown provider %q", composite, pid))
+	}
+	m, ok := p.Models[key]
+	if !ok {
+		return a.fail(cmd, codeNotFound, fmt.Errorf("no model %q in provider %q", composite, pid))
+	}
+
+	agnostic, err := client.Catalog(ctx)
+	if err != nil {
+		return a.fail(cmd, modelsCode(err), err)
+	}
+	canonical := ""
+	if _, ok := agnostic.Models[composite]; ok {
+		canonical = composite
+	}
+	a.log.Debug("models get resolved", "composite", composite, "provider", pid, "canonical", canonical)
+
+	r := modelRecord(m, pid, canonical)
+	fs, err := r.resolve(fields)
+	if err != nil {
+		return a.usage(cmd, err)
+	}
+	return a.ok(cmd, jsonObject(fs), nil, func(w io.Writer) {
+		if len(fields) > 0 {
+			// --fields is the scripting surface: bare values, no footer.
+			renderFields(w, fs)
+			return
+		}
+		fmt.Fprintln(w)
+		renderDetail(w, fs)
+		renderPriceFooter(w, modelFieldSet.all)
+	})
+}
+
+// modelsCode classifies a models-command failure. Caller/usage faults (missing or
+// unknown providers) are usage; recognisable schema drift is a data fault; anything
+// else on this model-centric command is a models.dev outage, hence transient.
 func modelsCode(err error) int {
 	switch {
-	case errors.Is(err, agentdex.ErrModelNotFound), errors.Is(err, agentdex.ErrModelAmbiguous):
-		return codeNotFound
 	case errors.Is(err, agentdex.ErrProvidersRequired), errors.Is(err, agentdex.ErrUnknownProvider):
 		return codeUsage
 	case errors.Is(err, modelsdev.ErrModelsSchema):

@@ -22,7 +22,7 @@ func TestGetAllPresent(t *testing.T) {
 	srv := modelsServer(t, []string{"anthropic"})
 	newScenario(t, srv.URL, "alpha-cli")
 
-	got := runCLI("--json", "get", "alpha-cli")
+	got := runCLI("--json", "agents", "get", "alpha-cli")
 	if got.code != codeOK {
 		t.Fatalf("get exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -36,7 +36,7 @@ func TestGetAllPresent(t *testing.T) {
 
 	// Text surface: Models section absent; Provider env present. Match whole
 	// lines only — temp paths can embed the test name substring "Models".
-	text := runCLI("get", "alpha-cli")
+	text := runCLI("agents", "get", "alpha-cli")
 	if text.code != codeOK {
 		t.Fatalf("get text exit = %d, stderr=%q", text.code, text.stderr)
 	}
@@ -52,7 +52,7 @@ func TestGetModelsOptIn(t *testing.T) {
 	srv := modelsServer(t, []string{"anthropic"})
 	newScenario(t, srv.URL, "alpha-cli")
 
-	got := runCLI("--json", "get", "alpha-cli", "--models")
+	got := runCLI("--json", "agents", "get", "alpha-cli", "--models")
 	if got.code != codeOK {
 		t.Fatalf("get --models exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -64,7 +64,7 @@ func TestGetModelsOptIn(t *testing.T) {
 		t.Errorf("models missing or empty with --models: %v", data["models"])
 	}
 
-	text := runCLI("get", "alpha-cli", "--models")
+	text := runCLI("agents", "get", "alpha-cli", "--models")
 	if text.code != codeOK {
 		t.Fatalf("get --models text exit = %d, stderr=%q", text.code, text.stderr)
 	}
@@ -77,7 +77,7 @@ func TestGetFieldsModelsDemandsFill(t *testing.T) {
 	srv := modelsServer(t, []string{"anthropic"})
 	newScenario(t, srv.URL, "alpha-cli")
 
-	got := runCLI("--json", "get", "alpha-cli", "--fields", "models")
+	got := runCLI("--json", "agents", "get", "alpha-cli", "--fields", "models")
 	if got.code != codeOK {
 		t.Fatalf("get --fields models exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -94,7 +94,7 @@ func TestGetFieldsOmitModelsKey(t *testing.T) {
 	srv := modelsServer(t, []string{"anthropic"})
 	newScenario(t, srv.URL, "alpha-cli")
 
-	got := runCLI("--json", "get", "alpha-cli", "--fields", "skills_dir")
+	got := runCLI("--json", "agents", "get", "alpha-cli", "--fields", "skills_dir")
 	if got.code != codeOK {
 		t.Fatalf("get --fields skills_dir exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -114,7 +114,7 @@ func TestGetModelsFlagFieldsOmitPresentation(t *testing.T) {
 	srv := modelsServer(t, []string{"anthropic"})
 	newScenario(t, srv.URL, "alpha-cli")
 
-	got := runCLI("--json", "get", "alpha-cli", "--models", "--fields", "skills_dir")
+	got := runCLI("--json", "agents", "get", "alpha-cli", "--models", "--fields", "skills_dir")
 	if got.code != codeOK {
 		t.Fatalf("get --models --fields skills_dir exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -143,7 +143,7 @@ func TestGetNoModelsFlagRejected(t *testing.T) {
 	srv := modelsServer(t, []string{"anthropic"})
 	newScenario(t, srv.URL, "alpha-cli")
 
-	got := runCLI("get", "alpha-cli", "--no-models")
+	got := runCLI("agents", "get", "alpha-cli", "--no-models")
 	if got.code != codeUsage {
 		t.Fatalf("--no-models exit = %d, want 2; stderr=%q", got.code, got.stderr)
 	}
@@ -154,7 +154,7 @@ func TestGetSomePresentWarns(t *testing.T) {
 	srv := modelsServer(t, []string{"google"})
 	newScenario(t, srv.URL, "gamma-agent")
 
-	got := runCLI("--json", "get", "gamma-agent")
+	got := runCLI("--json", "agents", "get", "gamma-agent")
 	if got.code != codeOK {
 		t.Fatalf("some-present exit = %d, want 0; stderr=%q", got.code, got.stderr)
 	}
@@ -168,7 +168,7 @@ func TestGetNonePresentIsDataError(t *testing.T) {
 	srv := modelsServer(t, []string{"google"})
 	newScenario(t, srv.URL, "alpha-cli")
 
-	got := runCLI("get", "alpha-cli")
+	got := runCLI("agents", "get", "alpha-cli")
 	if got.code != codeConfig {
 		t.Fatalf("none-present exit = %d, want 78; stderr=%q", got.code, got.stderr)
 	}
@@ -193,7 +193,7 @@ func TestGetNonModelsFieldsSkipModelsDevAndRollup(t *testing.T) {
 	// (which an unfiltered get reports as exit 78).
 	newScenario(t, mustNotFetchModelsServer(t), "alpha-cli")
 
-	got := runCLI("--json", "get", "alpha-cli", "--fields", "skills_dir")
+	got := runCLI("--json", "agents", "get", "alpha-cli", "--fields", "skills_dir")
 	if got.code != codeOK {
 		t.Fatalf("get --fields skills_dir exit = %d, want 0; stderr=%q", got.code, got.stderr)
 	}
@@ -208,7 +208,7 @@ func TestGetFieldsProvidersIsOfflineCatalogData(t *testing.T) {
 	// rollup, so absent-upstream providers cannot turn it into exit 78.
 	newScenario(t, mustNotFetchModelsServer(t), "alpha-cli")
 
-	got := runCLI("--json", "get", "alpha-cli", "--fields", "providers")
+	got := runCLI("--json", "agents", "get", "alpha-cli", "--fields", "providers")
 	if got.code != codeOK {
 		t.Fatalf("get --fields providers exit = %d, want 0; stderr=%q", got.code, got.stderr)
 	}
@@ -223,7 +223,7 @@ func TestGetSchemaIsDataError(t *testing.T) {
 	srv := modelsServer(t, []string{"google"}, "anthropic")
 	newScenario(t, srv.URL, "alpha-cli")
 
-	got := runCLI("get", "alpha-cli")
+	got := runCLI("agents", "get", "alpha-cli")
 	if got.code != codeConfig {
 		t.Fatalf("schema-drift exit = %d, want 78; stderr=%q", got.code, got.stderr)
 	}
@@ -239,7 +239,7 @@ func TestGetTopLevelSchemaIsDataErrorNotOutage(t *testing.T) {
 	t.Cleanup(srv.Close)
 	newScenario(t, srv.URL, "alpha-cli")
 
-	got := runCLI("get", "alpha-cli")
+	got := runCLI("agents", "get", "alpha-cli")
 	if got.code != codeConfig {
 		t.Fatalf("top-level schema drift exit = %d, want 78; stderr=%q", got.code, got.stderr)
 	}
@@ -252,7 +252,7 @@ func TestGetNotInstalled(t *testing.T) {
 	srv := modelsServer(t, []string{"anthropic"})
 	newScenario(t, srv.URL) // no binaries installed
 
-	got := runCLI("get", "alpha-cli")
+	got := runCLI("agents", "get", "alpha-cli")
 	if got.code != codeNotFound {
 		t.Fatalf("not-installed exit = %d, want 3; stderr=%q", got.code, got.stderr)
 	}
@@ -265,7 +265,7 @@ func TestGetNotInstalled(t *testing.T) {
 		t.Errorf("not-installed error missing from stderr: %q", got.stderr)
 	}
 
-	js := runCLI("--json", "get", "alpha-cli")
+	js := runCLI("--json", "agents", "get", "alpha-cli")
 	if js.code != codeNotFound {
 		t.Fatalf("not-installed --json exit = %d, want 3", js.code)
 	}
@@ -279,85 +279,47 @@ func TestGetNotInstalled(t *testing.T) {
 	}
 }
 
-func TestGetUnknownQuery(t *testing.T) {
+func TestGetUnknownIDIsNotFound(t *testing.T) {
+	// An id that names no catalogued agent is exact-miss not-found (exit 3), with no
+	// candidate list. The get verb never fuzzy-resolves.
 	srv := modelsServer(t, []string{"google"})
 	newScenario(t, srv.URL, "alpha-cli")
 
-	got := runCLI("get", "no-such-thing")
-	if got.code != codeUsage {
-		t.Fatalf("unknown exit = %d, want 2; stderr=%q", got.code, got.stderr)
+	got := runCLI("agents", "get", "no-such-thing")
+	if got.code != codeNotFound {
+		t.Fatalf("unknown id exit = %d, want 3; stderr=%q", got.code, got.stderr)
 	}
-	if !strings.Contains(got.stderr, "alpha-cli") {
-		t.Errorf("unknown error should list valid ids: %q", got.stderr)
+	// No candidate list: the error must not enumerate the catalog ids.
+	if strings.Contains(got.stderr, "alpha-cli") {
+		t.Errorf("get miss should not list candidates: %q", got.stderr)
 	}
 }
 
-func TestGetUncataloguedProviderMatch(t *testing.T) {
-	// "google" is not a catalog agent but is a models.dev provider. Without
-	// --models the fallthrough reports identity only — no models dump.
+func TestGetProviderQueryIsNotFoundNoFallthrough(t *testing.T) {
+	// "google" is a models.dev provider but not a catalogued agent. With the
+	// fallthrough removed, get treats it as a plain exact miss: exit 3 not-found,
+	// no provider payload reclassified onto the agent surface. Provider discovery
+	// now lives in providers get.
 	srv := modelsServer(t, []string{"google"})
 	newScenario(t, srv.URL, "alpha-cli")
 
-	got := runCLI("--json", "get", "google")
+	got := runCLI("--json", "agents", "get", "google")
 	if got.code != codeNotFound {
-		t.Fatalf("uncatalogued-provider exit = %d, want 3; stderr=%q", got.code, got.stderr)
+		t.Fatalf("provider-name query exit = %d, want 3; stderr=%q", got.code, got.stderr)
 	}
-	data, ok := got.envelope(t).Data.(map[string]any)
-	if !ok || data["provider"] != "google" {
-		t.Errorf("expected provider data labelled google: %v", got.envelope(t).Data)
+	env := got.envelope(t)
+	if env.Status != "error" {
+		t.Errorf("status = %q, want error", env.Status)
 	}
-	if _, ok := data["models"]; ok {
-		t.Errorf("fallthrough without --models should omit models: %v", data)
-	}
-	if data["name"] == nil || data["name"] == "" {
-		t.Errorf("fallthrough should report provider name: %v", data)
-	}
-
-	text := runCLI("get", "google")
-	if text.code != codeNotFound {
-		t.Fatalf("fallthrough text exit = %d, want 3; stderr=%q", text.code, text.stderr)
-	}
-	if !hasTextSection(text.stdout, "Provider") {
-		t.Errorf("fallthrough text should show Provider section:\n%s", text.stdout)
-	}
-	if hasTextSection(text.stdout, "Models") {
-		t.Errorf("fallthrough without --models should omit Models section:\n%s", text.stdout)
-	}
-}
-
-func TestGetUncataloguedProviderMatchWithModels(t *testing.T) {
-	srv := modelsServer(t, []string{"google"})
-	newScenario(t, srv.URL, "alpha-cli")
-
-	got := runCLI("--json", "get", "google", "--models")
-	if got.code != codeNotFound {
-		t.Fatalf("uncatalogued-provider --models exit = %d, want 3; stderr=%q", got.code, got.stderr)
-	}
-	data, ok := got.envelope(t).Data.(map[string]any)
-	if !ok || data["provider"] != "google" {
-		t.Errorf("expected provider data labelled google: %v", got.envelope(t).Data)
-	}
-	models, ok := data["models"].([]any)
-	if !ok || len(models) == 0 {
-		t.Errorf("fallthrough --models should include models: %v", data["models"])
-	}
-
-	text := runCLI("get", "google", "--models")
-	if text.code != codeNotFound {
-		t.Fatalf("fallthrough --models text exit = %d, want 3; stderr=%q", text.code, text.stderr)
-	}
-	if !hasTextSection(text.stdout, "Provider") {
-		t.Errorf("fallthrough --models text should keep Provider section:\n%s", text.stdout)
-	}
-	if !hasTextSection(text.stdout, "Models") {
-		t.Errorf("fallthrough --models text should show Models section:\n%s", text.stdout)
+	if env.Data != nil {
+		t.Errorf("provider-name query should carry no data payload: %v", env.Data)
 	}
 }
 
 func TestGetDegradesWhenModelsUnreachable(t *testing.T) {
 	newScenario(t, closedModelsServer(t), "alpha-cli")
 
-	got := runCLI("--json", "get", "alpha-cli")
+	got := runCLI("--json", "agents", "get", "alpha-cli")
 	if got.code != codeOK {
 		t.Fatalf("degrade exit = %d, want 0; stderr=%q", got.code, got.stderr)
 	}
@@ -379,7 +341,7 @@ func TestGetProbesVersionOnce(t *testing.T) {
 	counter := filepath.Join(s.home, "probe-count")
 	installCountingBin(t, s.binDir, "alpha-cli", counter)
 
-	got := runCLI("get", "alpha-cli")
+	got := runCLI("agents", "get", "alpha-cli")
 	if got.code != codeOK {
 		t.Fatalf("get exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -397,7 +359,7 @@ func TestGetVerboseAddsDetail(t *testing.T) {
 	srv := modelsServer(t, []string{"anthropic"})
 	newScenario(t, srv.URL, "alpha-cli")
 
-	plain := runCLI("get", "alpha-cli")
+	plain := runCLI("agents", "get", "alpha-cli")
 	if plain.code != codeOK {
 		t.Fatalf("get exit = %d, stderr=%q", plain.code, plain.stderr)
 	}
@@ -410,7 +372,7 @@ func TestGetVerboseAddsDetail(t *testing.T) {
 		t.Errorf("plain get should annotate the bin line with (found):\n%s", plain.stdout)
 	}
 
-	verbose := runCLI("get", "alpha-cli", "--verbose")
+	verbose := runCLI("agents", "get", "alpha-cli", "--verbose")
 	if verbose.code != codeOK {
 		t.Fatalf("get --verbose exit = %d, stderr=%q", verbose.code, verbose.stderr)
 	}
@@ -422,8 +384,8 @@ func TestGetVerboseAddsDetail(t *testing.T) {
 	}
 
 	// --json is identical with and without --verbose: verbose is text-only.
-	jsonPlain := runCLI("--json", "get", "alpha-cli")
-	jsonVerbose := runCLI("--json", "get", "alpha-cli", "--verbose")
+	jsonPlain := runCLI("--json", "agents", "get", "alpha-cli")
+	jsonVerbose := runCLI("--json", "agents", "get", "alpha-cli", "--verbose")
 	if jsonPlain.stdout != jsonVerbose.stdout {
 		t.Errorf("--verbose changed --json output:\nplain:\n%s\nverbose:\n%s", jsonPlain.stdout, jsonVerbose.stdout)
 	}
@@ -436,7 +398,7 @@ func TestGetTextDetailDrivenByRecord(t *testing.T) {
 	srv := modelsServer(t, []string{"anthropic"})
 	newScenario(t, srv.URL, "alpha-cli")
 
-	got := runCLI("get", "alpha-cli")
+	got := runCLI("agents", "get", "alpha-cli")
 	if got.code != codeOK {
 		t.Fatalf("get exit = %d, stderr=%q", got.code, got.stderr)
 	}
