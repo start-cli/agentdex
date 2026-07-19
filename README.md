@@ -17,16 +17,23 @@ They do not interfere: the Go build ignores `catalog/`, and the CUE module is ve
 
 agentdex ships a thin command-line interface over the library.
 
+The CLI is organised as noun groups (`agents`, `models`, `providers`, each aliased to its singular) with two shared verbs, `list` and `get`.
+
 ```
-agentdex list                    detected agents, table by default
-agentdex get <agent>             detail for one agent (aliases: view, show)
-agentdex models <agent> [query]  models available to the agent; query fuzzy-matches
-agentdex refresh [target]        force refresh caches: catalog | models | all
+agentdex agents list [filter]     detected agents, table by default
+agentdex agents get <id>          detail for one agent (aliases: view, show)
+agentdex models list [filter]     models across providers, newest release first
+agentdex models get <id>          detail for one model, by provider-id/model-id
+agentdex providers list [filter]  models.dev providers agentdex can enrich against
+agentdex providers get <id>       detail for one provider
+agentdex refresh [target]         force refresh caches: catalog | models | all
 agentdex version
-agentdex completion              shell completion script
+agentdex completion               shell completion script
 ```
 
-`list` shows each agent's models.dev model count, served from the warm cache and degrading to zero (with a warning) when models.dev is unreachable. `get` reports provider-env presence by default; Models fill is opt-in via `--models` or a `--fields` selection that includes `models`. Global flags include `--json` (a `status`/`data`/`error`/`warnings` envelope), `--color auto|always|never`, `--search-dir`, and `--bin-path id=path`. The `--fields` flag (field selection) is per-command, available on `list`, `get`, and `models`.
+`agents list` shows each agent's models.dev model count, served from the warm cache and degrading to zero (with a warning) when models.dev is unreachable; `--all` adds catalogued agents whose binary was not found. `agents get` reports provider-env presence by default; model fill is opt-in via `--models` or a `--fields` selection that includes `models`. `models list` scopes with `--provider` (models.dev provider ids) or `--agent` (a catalogued agent's providers).
+
+Every `list` verb orders by `id` (`models list` by newest release date) and accepts `--order-by <field>` to sort by any field — for example `models list --order-by total` for combined price — with `--reverse` to flip the direction; the sort column is pulled leftmost so the ordering is legible. `--fields` selects output fields on any `list` or `get` verb. Global flags include `--json` (a `status`/`data`/`error`/`warnings` envelope), `--color auto|always|never`, `--search-dir`, and `--bin-path id=path`.
 
 Configuration is optional and lives at `$XDG_CONFIG_HOME/agentdex/config.cue`. See `docs/agentdex-design.md` for the full schema.
 

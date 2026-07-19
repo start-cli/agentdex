@@ -82,7 +82,7 @@ const priceUnitNote = "Prices in USD per 1M tokens (models.dev)"
 // numbers under documented keys.
 func renderPriceFooter(w io.Writer, cols []string) {
 	for _, c := range cols {
-		if c == "input" || c == "output" {
+		if c == "input" || c == "output" || c == "total" {
 			fmt.Fprintln(w, tui.Muted.Sprint(priceUnitNote))
 			return
 		}

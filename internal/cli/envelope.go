@@ -32,10 +32,15 @@ type field struct {
 // table columns without an explicit selection. It is the single source of truth
 // for validation (independent of how many records exist) and for field ordering,
 // so a record never derives validity from the fields it happens to carry.
+// defaultKey and descend govern ordering: defaultKey is the field sorted by when
+// --order-by is absent, and descend holds the keys whose natural direction is
+// descending (newest or most first), which --reverse flips.
 type fieldSet struct {
-	all      []string
-	defaults []string
-	index    map[string]bool
+	all        []string
+	defaults   []string
+	index      map[string]bool
+	defaultKey string
+	descend    map[string]bool
 }
 
 // newFieldSet builds a fieldSet, precomputing the membership index used for

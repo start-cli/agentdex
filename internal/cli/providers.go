@@ -24,15 +24,21 @@ func (a *app) newProvidersCmd() *cobra.Command {
 }
 
 func (a *app) newProvidersListCmd() *cobra.Command {
-	var fields []string
+	var (
+		fields  []string
+		orderBy string
+		reverse bool
+	)
 	cmd := &cobra.Command{
 		Use:   "list [filter]",
 		Short: "List the models.dev providers agentdex can enrich against",
 		Long: "List the models.dev providers usable with --provider on agents and models, " +
 			"with each provider's id, display name, API-key environment variables and whether they " +
-			"are set, and its model count. The optional filter narrows the list to providers whose id " +
-			"or name contains it (case-insensitive); it is a browse narrowing, not a selector, so a " +
-			"filter matching nothing prints an empty listing and exits 0.",
+			"are set, and its model count. Rows are ordered by id by default; --order-by sorts by " +
+			"any field (for example models for model count) and --reverse flips the direction. The " +
+			"optional filter narrows the list to providers whose id or name contains it " +
+			"(case-insensitive); it is a browse narrowing, not a selector, so a filter matching " +
+			"nothing prints an empty listing and exits 0.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := a.requireConfig()
@@ -43,19 +49,20 @@ func (a *app) newProvidersListCmd() *cobra.Command {
 			if len(args) == 1 {
 				filter = args[0]
 			}
-			return a.providersList(cmd, cfg.ModelsClient(), filter, fields)
+			return a.providersList(cmd, cfg.ModelsClient(), filter, fields, orderBy, reverse)
 		},
 	}
 	registerFieldsFlag(cmd, &fields)
+	registerOrderFlags(cmd, &orderBy, &reverse)
 	addFieldsHelpSection(cmd, providerFieldSet)
 	return cmd
 }
 
 // providersList fetches the merged models.dev catalog, narrows it by the filter,
-// and reports the providers sorted by id. It reads env-var presence at the boundary
-// through os.LookupEnv and loads no agent catalog: a provider listing is a pure
-// models.dev surface.
-func (a *app) providersList(cmd *cobra.Command, client *modelsdev.Client, filter string, fields []string) error {
+// and reports the providers ordered by --order-by (by id by default). It reads
+// env-var presence at the boundary through os.LookupEnv and loads no agent catalog:
+// a provider listing is a pure models.dev surface.
+func (a *app) providersList(cmd *cobra.Command, client *modelsdev.Client, filter string, fields []string, orderBy string, reverse bool) error {
 	cat, err := client.Catalog(cmd.Context())
 	if err != nil {
 		return a.fail(cmd, providersCode(err), err)
@@ -70,10 +77,14 @@ func (a *app) providersList(cmd *cobra.Command, client *modelsdev.Client, filter
 		}
 		recs = append(recs, providerRecord(p, envPresence(p.Env, os.LookupEnv)))
 	}
+	sortKey, err := applyOrder(recs, providerFieldSet, orderBy, reverse)
+	if err != nil {
+		return a.usage(cmd, err)
+	}
 
 	tableCols := fields
 	if len(tableCols) == 0 {
-		tableCols = providerFieldSet.defaults
+		tableCols = orderColumns(providerFieldSet.defaults, sortKey)
 	}
 	data, headers, rows, err := tabulate(recs, fields, tableCols, providerFieldSet)
 	if err != nil {

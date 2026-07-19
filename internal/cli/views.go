@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -18,7 +19,7 @@ import (
 var agentFieldSet = newFieldSet(
 	[]string{"id", "name", "version", "bin", "found", "config_dir", "config_local_dir", "skills_dir", "providers", "homepage", "provider_env", "models"},
 	[]string{"id", "name", "version", "providers", "models", "bin"},
-)
+).ordered("id")
 
 // agentVerboseFields are the list table columns under --verbose: the default
 // columns widened with the global config dir. models sits between providers and
@@ -98,9 +99,9 @@ func withModels(r *record, models []modelsdev.Model) {
 // modelFieldSet is the declared field authority for a model: every valid --fields
 // key in canonical order, and the subset shown as default models-table columns.
 var modelFieldSet = newFieldSet(
-	[]string{"id", "provider", "name", "family", "context", "input", "output", "reasoning", "tool_call", "attachment", "canonical_id"},
+	[]string{"id", "provider", "name", "family", "context", "input", "output", "total", "reasoning", "tool_call", "attachment", "released", "canonical_id"},
 	[]string{"id", "name", "context", "input", "output"},
-)
+).ordered("released", "released")
 
 // modelRecord builds the field values for one model. canonical_id is added only
 // when non-empty (the model has a real models.dev agnostic id); it remains valid
@@ -115,9 +116,11 @@ func modelRecord(m modelsdev.Model, providerID, canonicalID string) *record {
 	r.add("context", m.Limit.Context, fmt.Sprintf("%d", m.Limit.Context))
 	r.add("input", costValue(m.Cost, costInput), costText(m.Cost, costInput))
 	r.add("output", costValue(m.Cost, costOutput), costText(m.Cost, costOutput))
+	r.add("total", totalValue(m.Cost), totalText(m.Cost))
 	r.add("reasoning", m.Reasoning, fmt.Sprintf("%t", m.Reasoning))
 	r.add("tool_call", m.ToolCall, fmt.Sprintf("%t", m.ToolCall))
 	r.add("attachment", m.Attachment, fmt.Sprintf("%t", m.Attachment))
+	r.add("released", m.ReleaseDate, orDash(m.ReleaseDate))
 	if canonicalID != "" {
 		r.add("canonical_id", canonicalID, canonicalID)
 	}
@@ -133,7 +136,7 @@ func modelRecord(m modelsdev.Model, providerID, canonicalID string) *record {
 var providerFieldSet = newFieldSet(
 	[]string{"id", "name", "env", "present", "models", "doc", "npm", "api"},
 	[]string{"id", "name", "env", "models"},
-)
+).ordered("id")
 
 // providerRecord builds the field values for one provider. present maps each of the
 // provider's API-key variable names to whether it is set in the environment; it is
@@ -236,6 +239,39 @@ func costValue(c *modelsdev.Cost, kind costKind) any {
 // rather than rounding to a misleading "$0.00".
 func costText(c *modelsdev.Cost, kind costKind) string {
 	v, ok := costFor(c, kind)
+	if !ok {
+		return "-"
+	}
+	return "$" + strconv.FormatFloat(v, 'f', -1, 64)
+}
+
+// combinedCost sums the input and output price per 1M tokens, rounding away the
+// binary floating-point artifact the addition can introduce (0.05+0.025 lands at
+// 0.07500000000000001) at nano-dollar precision, well below any realistic price so
+// no genuine value is distorted. The bool is false when pricing is unknown.
+func combinedCost(c *modelsdev.Cost) (float64, bool) {
+	if c == nil {
+		return 0, false
+	}
+	return math.Round((c.Input+c.Output)*1e9) / 1e9, true
+}
+
+// totalValue is the combined input+output price per 1M tokens for JSON, or nil when
+// pricing is unknown so the field is null and sorts last rather than a misleading
+// zero. It is a rough comparison signal, not a workload cost: real usage rarely
+// splits input and output tokens evenly.
+func totalValue(c *modelsdev.Cost) any {
+	v, ok := combinedCost(c)
+	if !ok {
+		return nil
+	}
+	return v
+}
+
+// totalText renders the combined price with the same "$" trimming as costText, or a
+// dash when pricing is unknown.
+func totalText(c *modelsdev.Cost) string {
+	v, ok := combinedCost(c)
 	if !ok {
 		return "-"
 	}

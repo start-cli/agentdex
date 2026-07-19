@@ -31,6 +31,8 @@ func (a *app) newAgentsListCmd() *cobra.Command {
 		all       bool
 		fields    []string
 		providers []string
+		orderBy   string
+		reverse   bool
 	)
 	cmd := &cobra.Command{
 		Use:   "list [filter]",
@@ -39,9 +41,10 @@ func (a *app) newAgentsListCmd() *cobra.Command {
 			"is enriched from models.dev, served from the local cache when warm and degrading " +
 			"to zero when models.dev cannot be reached. Provider-agnostic agents show \"-\" " +
 			"unless --provider is given. --all adds the catalogued agents whose binary was " +
-			"not found, with \"missing\" in the BIN column. An optional filter narrows the list " +
-			"to agents whose id or name contains it (case-insensitive); a filter matching " +
-			"nothing prints an empty listing and exits 0.",
+			"not found, with \"missing\" in the BIN column. Detected agents lead and the rows " +
+			"are ordered by id by default; --order-by sorts by any field and --reverse flips the " +
+			"direction. An optional filter narrows the list to agents whose id or name contains " +
+			"it (case-insensitive); a filter matching nothing prints an empty listing and exits 0.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := a.requireConfig()
@@ -118,10 +121,6 @@ func (a *app) newAgentsListCmd() *cobra.Command {
 			}
 			a.log.Debug("list detected agents", "count", len(agents), "all", all, "filter", filter)
 
-			// Under --all, detected agents read first; the not-found tail keeps the
-			// library's by-id order within each group.
-			sort.SliceStable(agents, func(i, j int) bool { return agents[i].Found && !agents[j].Found })
-
 			recs := make([]*record, len(agents))
 			for i := range agents {
 				r := agentRecord(&agents[i])
@@ -134,17 +133,28 @@ func (a *app) newAgentsListCmd() *cobra.Command {
 				}
 				recs[i] = r
 			}
+			sortKey, err := applyOrder(recs, agentFieldSet, orderBy, reverse)
+			if err != nil {
+				return a.usage(cmd, err)
+			}
+			if orderBy == "" {
+				// The default view groups detected agents ahead of the not-found tail
+				// (--all); the stable sort keeps the id ordering within each group.
+				// An explicit --order-by is a pure field sort with no such grouping.
+				sort.SliceStable(recs, func(i, j int) bool { return recordFound(recs[i]) && !recordFound(recs[j]) })
+			}
 
-			// Compose the table columns: --verbose widens them. This is a text-table
-			// affordance only; the JSON payload always carries the full record (driven
-			// by the user's --fields selection), so it is unaffected. An explicit
-			// --fields wins over both.
+			// Compose the table columns: --verbose widens them, then the sort column is
+			// pulled leftmost so the ordering is legible. This is a text-table affordance
+			// only; the JSON payload always carries the full record (driven by the user's
+			// --fields selection), so it is unaffected. An explicit --fields wins over both.
 			tableCols := fields
 			if len(tableCols) == 0 {
-				tableCols = agentFieldSet.defaults
+				base := agentFieldSet.defaults
 				if a.verbose {
-					tableCols = agentVerboseFields
+					base = agentVerboseFields
 				}
+				tableCols = orderColumns(base, sortKey)
 			}
 
 			data, headers, rows, err := tabulate(recs, fields, tableCols, agentFieldSet)
@@ -164,8 +174,16 @@ func (a *app) newAgentsListCmd() *cobra.Command {
 	cmd.Flags().BoolVar(&all, "all", false, "Include catalogued agents that were not detected")
 	cmd.Flags().StringSliceVar(&providers, "provider", nil, "models.dev provider ids for agnostic agents' model counts (repeatable or csv)")
 	registerFieldsFlag(cmd, &fields)
+	registerOrderFlags(cmd, &orderBy, &reverse)
 	addFieldsHelpSection(cmd, agentFieldSet)
 	return cmd
+}
+
+// recordFound reports whether an agent record's found field is set, for the default
+// list grouping that leads with detected agents.
+func recordFound(r *record) bool {
+	found, _ := r.value("found").(bool)
+	return found
 }
 
 // filterAgents narrows detected agents to those whose id or name contains the

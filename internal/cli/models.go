@@ -4,7 +4,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"sort"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -29,16 +28,20 @@ func (a *app) newModelsListCmd() *cobra.Command {
 		fields    []string
 		providers []string
 		agent     string
+		orderBy   string
+		reverse   bool
 	)
 	cmd := &cobra.Command{
 		Use:   "list [filter]",
 		Short: "List models across providers",
-		Long: "List models across models.dev providers, with pricing, limits, and capabilities, " +
-			"newest release first. With no scope it lists every provider's models; --provider scopes " +
-			"to the given models.dev provider ids and --agent scopes to a catalogued agent's " +
-			"providers. The optional filter narrows the listing to models whose id or name contains " +
-			"it (case-insensitive) and composes with any scope. A provider-agnostic --agent requires " +
-			"--provider; a home-provider --agent rejects it.",
+		Long: "List models across models.dev providers, with pricing, limits, and capabilities. " +
+			"Rows are newest release first by default; --order-by sorts by any field (for example " +
+			"total for combined price) and --reverse flips the direction. With no scope it lists " +
+			"every provider's models; --provider scopes to the given models.dev provider ids and " +
+			"--agent scopes to a catalogued agent's providers. The optional filter narrows the " +
+			"listing to models whose id or name contains it (case-insensitive) and composes with " +
+			"any scope. A provider-agnostic --agent requires --provider; a home-provider --agent " +
+			"rejects it.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := a.requireConfig()
@@ -54,10 +57,11 @@ func (a *app) newModelsListCmd() *cobra.Command {
 			if ferr != nil {
 				return ferr
 			}
-			return a.modelsList(cmd, providerSet, client, filter, fields, warnings)
+			return a.modelsList(cmd, providerSet, client, filter, fields, orderBy, reverse, warnings)
 		},
 	}
 	registerFieldsFlag(cmd, &fields)
+	registerOrderFlags(cmd, &orderBy, &reverse)
 	cmd.Flags().StringSliceVar(&providers, "provider", nil, "Scope to these models.dev provider ids (repeatable or csv)")
 	cmd.Flags().StringVar(&agent, "agent", "", "Scope to the providers of this catalogued agent id")
 	addFieldsHelpSection(cmd, modelFieldSet)
@@ -117,10 +121,10 @@ func (a *app) resolveModelsScope(cmd *cobra.Command, cfg *config.Config, client 
 }
 
 // modelsList reports every model the scoped providers offer, narrowed by the
-// browse filter and ordered newest release first. A provider absent from a
-// reachable models.dev contributes nothing; an outage with no cache is transient
-// for this model-centric command.
-func (a *app) modelsList(cmd *cobra.Command, providers []string, client *modelsdev.Client, filter string, fields, warnings []string) error {
+// browse filter and ordered by --order-by (newest release first by default). A
+// provider absent from a reachable models.dev contributes nothing; an outage with
+// no cache is transient for this model-centric command.
+func (a *app) modelsList(cmd *cobra.Command, providers []string, client *modelsdev.Client, filter string, fields []string, orderBy string, reverse bool, warnings []string) error {
 	ctx := cmd.Context()
 	agnostic, err := client.Catalog(ctx)
 	if err != nil {
@@ -128,14 +132,7 @@ func (a *app) modelsList(cmd *cobra.Command, providers []string, client *modelsd
 	}
 
 	needle := strings.ToLower(filter)
-	// Collect first, then order newest release first across all providers; the
-	// records are built from the sorted listing so text and JSON agree.
-	type entry struct {
-		m         modelsdev.Model
-		pid       string
-		canonical string
-	}
-	var entries []entry
+	var recs []*record
 	for _, pid := range providers {
 		p, found, err := client.Provider(ctx, pid)
 		if err != nil {
@@ -155,20 +152,20 @@ func (a *app) modelsList(cmd *cobra.Command, providers []string, client *modelsd
 			if _, ok := agnostic.Models[composite]; ok {
 				canonical = composite
 			}
-			entries = append(entries, entry{m: m, pid: pid, canonical: canonical})
+			recs = append(recs, modelRecord(m, pid, canonical))
 		}
 	}
-	sort.SliceStable(entries, func(i, j int) bool { return newerModel(entries[i].m, entries[j].m) })
-	recs := make([]*record, len(entries))
-	for i, e := range entries {
-		recs[i] = modelRecord(e.m, e.pid, e.canonical)
+	sortKey, err := applyOrder(recs, modelFieldSet, orderBy, reverse)
+	if err != nil {
+		return a.usage(cmd, err)
 	}
 
-	// The text table shows the declared default columns unless --fields overrides;
-	// the JSON payload carries the full model record (driven by --fields) regardless.
+	// The text table shows the declared default columns unless --fields overrides,
+	// with the sort column pulled leftmost so the ordering is legible; the JSON
+	// payload carries the full model record (driven by --fields) regardless.
 	tableCols := fields
 	if len(tableCols) == 0 {
-		tableCols = modelFieldSet.defaults
+		tableCols = orderColumns(modelFieldSet.defaults, sortKey)
 	}
 	data, headers, rows, err := tabulate(recs, fields, tableCols, modelFieldSet)
 	if err != nil {
