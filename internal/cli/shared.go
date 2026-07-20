@@ -9,7 +9,7 @@ import (
 
 // staleCatalogWarning is the single warning every command emits when the catalog
 // load returns stale, so the wording never drifts between the noun surfaces.
-const staleCatalogWarning = "agent catalog is stale: re-resolution failed, using the last resolved version"
+const staleCatalogWarning = "agentdex catalog is stale: re-resolution failed, using the last resolved version"
 
 // matchesFilter is the shared browse narrowing for every list verb: it reports
 // whether id or name contains needle, which the caller has already lower-cased.

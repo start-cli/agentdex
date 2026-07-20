@@ -23,7 +23,7 @@ func TestRefreshAll(t *testing.T) {
 func TestRefreshModelsTransientWithoutNetwork(t *testing.T) {
 	newScenario(t, closedModelsServer(t), "alpha-cli")
 
-	got := runCLI("refresh", "models")
+	got := runCLI("refresh", "models.dev")
 	if got.code != codeTransient {
 		t.Fatalf("refresh models offline exit = %d, want 75; stderr=%q", got.code, got.stderr)
 	}
@@ -39,12 +39,12 @@ func TestRefreshModelsWarmCacheOfflineIsTransient(t *testing.T) {
 	}))
 	newScenario(t, srv.URL, "alpha-cli")
 
-	if got := runCLI("refresh", "models"); got.code != codeOK {
+	if got := runCLI("refresh", "models.dev"); got.code != codeOK {
 		t.Fatalf("warm refresh exit = %d, want 0; stderr=%q", got.code, got.stderr)
 	}
 
 	srv.Close() // go offline; the cache written above is now stale
-	if got := runCLI("refresh", "models"); got.code != codeTransient {
+	if got := runCLI("refresh", "models.dev"); got.code != codeTransient {
 		t.Fatalf("offline refresh with warm cache exit = %d, want 75; stderr=%q", got.code, got.stderr)
 	}
 }

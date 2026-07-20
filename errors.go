@@ -4,7 +4,7 @@ import "errors"
 
 // ErrCatalogUnavailable is returned when the agent catalog cannot be loaded:
 // no network and no previously resolved version to fall back on.
-var ErrCatalogUnavailable = errors.New("agent catalog unavailable")
+var ErrCatalogUnavailable = errors.New("agentdex catalog unavailable")
 
 // ErrAgentUnknown is returned by DetectOne and ResolveModel when the id names no
 // catalog agent. It is the only "not a catalog agent" signal; a known agent whose
