@@ -1,6 +1,6 @@
 # agentdex
 
-agentdex is a Go library plus thin CLI that indexes AI coding agents together with the models.dev provider and model data that describes them, and detects which of those agents are installed on the local machine. For an agent it reports the binary, version, config and skills directories, providers, and available models (enriched from models.dev); providers and models are browsable as data in their own right. It owns the outside of an agent — identity, location, paths, version, capability — and never reads an agent's internal configuration. The full design is in `docs/agentdex-design.md`; project documents (`NN-*.md`) carry the slice of work each builds.
+agentdex is a Go library plus thin CLI that indexes AI coding agents together with the models.dev provider and model data that describes them, and detects which of those agents are installed on the local machine. For an agent it reports the binary, version, config and skills directories, providers, and available models (enriched from models.dev); providers and models are browsable as data in their own right. It owns the outside of an agent — identity, location, paths, version, capability — and never reads an agent's internal configuration. Project documents (`NN-*.md`) carry the slice of work each builds.
 
 ## Module layout
 

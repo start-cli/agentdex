@@ -35,7 +35,7 @@ agentdex completion               shell completion script
 
 Every `list` verb orders by `id` (`models list` by newest release date) and accepts `--order-by <field>` to sort by any field — for example `models list --order-by total` for combined price — with `--reverse` to flip the direction; the sort column is pulled leftmost so the ordering is legible. `--fields` selects output fields on any `list` or `get` verb. Global flags include `--json` (a `status`/`data`/`error`/`warnings` envelope), `--color auto|always|never`, `--search-dir`, and `--bin-path id=path`.
 
-Configuration is optional and lives at `$XDG_CONFIG_HOME/agentdex/config.cue`. See `docs/agentdex-design.md` for the full schema.
+Configuration is optional and lives at `$XDG_CONFIG_HOME/agentdex/config.cue`. See `internal/config/schema.cue` for the full schema.
 
 ## Install
 
