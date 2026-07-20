@@ -201,6 +201,11 @@ func TestModelsListFilterComposesWithScope(t *testing.T) {
 	if rows := miss.envelope(t).Data.([]any); len(rows) != 0 {
 		t.Errorf("filter gemini under anthropic rows = %d, want 0", len(rows))
 	}
+
+	text := runCLI("models", "list", "gemini", "--provider", "anthropic")
+	if !strings.Contains(text.stdout, `No models match "gemini".`) {
+		t.Errorf("no-match text output missing filter-aware empty-state line:\n%s", text.stdout)
+	}
 }
 
 func TestModelsListAgentScope(t *testing.T) {

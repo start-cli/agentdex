@@ -160,6 +160,30 @@ func TestModelsListFieldsAuthoritativeOverOrderColumn(t *testing.T) {
 	}
 }
 
+func TestModelsListSurfacesProviderColumnAcrossProviders(t *testing.T) {
+	// Across more than one provider the browse listing shows PROVIDER so otherwise
+	// identical rows are distinguishable and the get composite is derivable; a
+	// single-provider scope omits the redundant column.
+	srv := modelsServer(t, []string{"anthropic", "google", "openai"})
+	newScenario(t, srv.URL)
+
+	multi := runCLI("models", "list")
+	if multi.code != codeOK {
+		t.Fatalf("models list exit = %d, stderr=%q", multi.code, multi.stderr)
+	}
+	if !strings.Contains(multi.stdout, "PROVIDER") {
+		t.Errorf("multi-provider listing should surface the PROVIDER column:\n%s", multi.stdout)
+	}
+
+	single := runCLI("models", "list", "--provider", "anthropic")
+	if single.code != codeOK {
+		t.Fatalf("models list --provider anthropic exit = %d, stderr=%q", single.code, single.stderr)
+	}
+	if strings.Contains(single.stdout, "PROVIDER") {
+		t.Errorf("single-provider listing should omit the redundant PROVIDER column:\n%s", single.stdout)
+	}
+}
+
 func TestAgentsListDefaultGroupsFoundFirst(t *testing.T) {
 	// The default list places the not-found tail after detected agents; the default
 	// id ordering holds within each group, so the missing delta-agent trails.

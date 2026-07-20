@@ -56,6 +56,11 @@ func TestListFilterNoMatchIsEmptyExitZero(t *testing.T) {
 	if rows := got.envelope(t).Data.([]any); len(rows) != 0 {
 		t.Errorf("no-match filter data = %v, want empty", rows)
 	}
+
+	text := runCLI("agents", "list", "no-such-agent")
+	if !strings.Contains(text.stdout, `No agents match "no-such-agent".`) {
+		t.Errorf("no-match text output missing filter-aware empty-state line:\n%s", text.stdout)
+	}
 }
 
 func TestListJSONEnvelope(t *testing.T) {

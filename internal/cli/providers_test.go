@@ -142,8 +142,8 @@ func TestProvidersFilterNoMatchIsEmptyExitZero(t *testing.T) {
 	}
 
 	text := runCLI("providers", "list", "no-such-provider")
-	if !strings.Contains(text.stdout, "No providers.") {
-		t.Errorf("no-match text output missing empty-state line:\n%s", text.stdout)
+	if !strings.Contains(text.stdout, `No providers match "no-such-provider".`) {
+		t.Errorf("no-match text output missing filter-aware empty-state line:\n%s", text.stdout)
 	}
 }
 

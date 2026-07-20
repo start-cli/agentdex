@@ -1,11 +1,22 @@
 package cli
 
 import (
+	"fmt"
 	"strings"
 
 	"github.com/spf13/cobra"
 	"github.com/spf13/pflag"
 )
+
+// emptyListMessage is the empty-state line for a browse listing. A filter that
+// matched nothing names the filter, so the user sees their narrowing was the cause
+// rather than an empty catalog; with no filter the genuine-empty fallback is used.
+func emptyListMessage(filter, noun, fallback string) string {
+	if filter != "" {
+		return fmt.Sprintf("No %s match %q.", noun, filter)
+	}
+	return fallback
+}
 
 // staleCatalogWarning is the single warning every command emits when the catalog
 // load returns stale, so the wording never drifts between the noun surfaces.

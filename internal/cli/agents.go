@@ -163,10 +163,11 @@ func (a *app) newAgentsListCmd() *cobra.Command {
 			if err != nil {
 				return a.usage(cmd, err)
 			}
-			empty := "No agents catalogued."
+			fallback := "No agents catalogued."
 			if installed {
-				empty = "No agents detected."
+				fallback = "No agents detected."
 			}
+			empty := emptyListMessage(filter, "agents", fallback)
 			return a.ok(cmd, data, warnings, func(w io.Writer) {
 				fmt.Fprintln(w)
 				renderTable(w, headers, rows, empty)

@@ -90,9 +90,10 @@ func (a *app) providersList(cmd *cobra.Command, client *modelsdev.Client, filter
 	if err != nil {
 		return a.usage(cmd, err)
 	}
+	empty := emptyListMessage(filter, "providers", "No providers.")
 	return a.ok(cmd, data, nil, func(w io.Writer) {
 		fmt.Fprintln(w)
-		renderTable(w, headers, rows, "No providers.")
+		renderTable(w, headers, rows, empty)
 	})
 }
 

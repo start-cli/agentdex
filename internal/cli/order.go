@@ -159,6 +159,25 @@ func recordID(r *record) string {
 	return ""
 }
 
+// insertAfter returns cols with add placed immediately after the first occurrence of
+// anchor, leaving cols unchanged when anchor is absent or add is already present. It
+// copies rather than mutating the shared default slice it is given.
+func insertAfter(cols []string, anchor, add string) []string {
+	for _, c := range cols {
+		if c == add {
+			return cols
+		}
+	}
+	out := make([]string, 0, len(cols)+1)
+	for _, c := range cols {
+		out = append(out, c)
+		if c == anchor {
+			out = append(out, add)
+		}
+	}
+	return out
+}
+
 // orderColumns pulls the sort column to the leftmost position of the table columns so
 // the ordering is legible: it is prepended when absent and moved to the front when
 // already present. It applies only to the default and verbose column sets; an

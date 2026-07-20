@@ -165,15 +165,22 @@ func (a *app) modelsList(cmd *cobra.Command, providers []string, client *modelsd
 	// payload carries the full model record (driven by --fields) regardless.
 	tableCols := fields
 	if len(tableCols) == 0 {
-		tableCols = orderColumns(modelFieldSet.defaults, sortKey)
+		defaults := modelFieldSet.defaults
+		// Across more than one provider the provider id disambiguates otherwise
+		// identical rows and forms the get composite, so surface it beside id.
+		if len(providers) > 1 {
+			defaults = insertAfter(defaults, "id", "provider")
+		}
+		tableCols = orderColumns(defaults, sortKey)
 	}
 	data, headers, rows, err := tabulate(recs, fields, tableCols, modelFieldSet)
 	if err != nil {
 		return a.usage(cmd, err)
 	}
+	empty := emptyListMessage(filter, "models", "No models available.")
 	return a.ok(cmd, data, warnings, func(w io.Writer) {
 		fmt.Fprintln(w)
-		renderTable(w, headers, rows, "No models available.")
+		renderTable(w, headers, rows, empty)
 		if len(rows) > 0 {
 			renderPriceFooter(w, tableCols)
 		}
