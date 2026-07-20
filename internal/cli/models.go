@@ -88,7 +88,7 @@ func (a *app) resolveModelsScope(cmd *cobra.Command, cfg *config.Config, client 
 		}
 		ka, ok := cat.Agents[agentID]
 		if !ok {
-			return nil, nil, a.fail(cmd, codeNotFound, fmt.Errorf("no agent %q; run \"agentdex agents list --all\" to see agent ids", agentID), warnings...)
+			return nil, nil, a.fail(cmd, codeNotFound, fmt.Errorf("no agent %q; run \"agentdex agents list\" to see agent ids", agentID), warnings...)
 		}
 		if ka.Agnostic {
 			if len(callerProviders) == 0 {

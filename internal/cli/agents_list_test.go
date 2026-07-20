@@ -8,7 +8,7 @@ import (
 func TestListDetectsInstalledAgents(t *testing.T) {
 	newScenario(t, "", "alpha-cli", "beta-tool", "gamma-agent")
 
-	got := runCLI("agents", "list")
+	got := runCLI("agents", "list", "--installed")
 	if got.code != codeOK {
 		t.Fatalf("list exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -61,7 +61,7 @@ func TestListFilterNoMatchIsEmptyExitZero(t *testing.T) {
 func TestListJSONEnvelope(t *testing.T) {
 	newScenario(t, "", "alpha-cli")
 
-	got := runCLI("--json", "agents", "list")
+	got := runCLI("--json", "agents", "list", "--installed")
 	if got.code != codeOK {
 		t.Fatalf("list exit = %d, stderr=%q", got.code, got.stderr)
 	}
@@ -151,42 +151,42 @@ func TestListVerboseAddsColumns(t *testing.T) {
 	}
 }
 
-func TestListAllIncludesMissingAgents(t *testing.T) {
-	// --all adds the catalogued-but-not-installed agents after the detected ones,
-	// with "missing" in the bin cell; the plain list keeps omitting them. In JSON
-	// the missing rows carry found:false and a blank bin, never the "missing"
-	// marker (a text-surface affordance only).
+func TestListDefaultIncludesMissingAgents(t *testing.T) {
+	// The default listing is the whole catalog: the catalogued-but-not-installed
+	// agents follow the detected ones, with "missing" in the bin cell. --installed
+	// narrows to just the detected agents. In JSON the missing rows carry found:false
+	// and a blank bin, never the "missing" marker (a text-surface affordance only).
 	newScenario(t, "", "beta-tool")
 
-	plain := runCLI("agents", "list")
-	if plain.code != codeOK {
-		t.Fatalf("list exit = %d, stderr=%q", plain.code, plain.stderr)
+	installed := runCLI("agents", "list", "--installed")
+	if installed.code != codeOK {
+		t.Fatalf("list --installed exit = %d, stderr=%q", installed.code, installed.stderr)
 	}
-	if strings.Contains(plain.stdout, "alpha-cli") || strings.Contains(plain.stdout, "missing") {
-		t.Errorf("plain list should omit missing agents:\n%s", plain.stdout)
+	if strings.Contains(installed.stdout, "alpha-cli") || strings.Contains(installed.stdout, "missing") {
+		t.Errorf("list --installed should omit missing agents:\n%s", installed.stdout)
 	}
 
-	all := runCLI("agents", "list", "--all")
+	all := runCLI("agents", "list")
 	if all.code != codeOK {
-		t.Fatalf("list --all exit = %d, stderr=%q", all.code, all.stderr)
+		t.Fatalf("list exit = %d, stderr=%q", all.code, all.stderr)
 	}
 	for _, want := range []string{"alpha-cli", "beta-tool", "gamma-agent", "delta-agent", "missing"} {
 		if !strings.Contains(all.stdout, want) {
-			t.Errorf("list --all missing %q:\n%s", want, all.stdout)
+			t.Errorf("default list missing %q:\n%s", want, all.stdout)
 		}
 	}
 	// Detected agents read first: beta-tool (installed) above the missing tail.
 	if strings.Index(all.stdout, "beta-tool") > strings.Index(all.stdout, "alpha-cli") {
-		t.Errorf("list --all should order detected agents first:\n%s", all.stdout)
+		t.Errorf("default list should order detected agents first:\n%s", all.stdout)
 	}
 
-	got := runCLI("--json", "agents", "list", "--all")
+	got := runCLI("--json", "agents", "list")
 	if got.code != codeOK {
-		t.Fatalf("list --all --json exit = %d, stderr=%q", got.code, got.stderr)
+		t.Fatalf("list --json exit = %d, stderr=%q", got.code, got.stderr)
 	}
 	rows := got.envelope(t).Data.([]any)
 	if len(rows) != 4 {
-		t.Fatalf("list --all rows = %d, want 4", len(rows))
+		t.Fatalf("default list rows = %d, want 4", len(rows))
 	}
 	byID := map[string]map[string]any{}
 	for _, r := range rows {
@@ -206,7 +206,7 @@ func TestListAllIncludesMissingAgents(t *testing.T) {
 	// fails the command) with models not-applicable (JSON null), distinct from a
 	// home-provider agent's degraded empty list.
 	if _, ok := byID["delta-agent"]; !ok {
-		t.Fatalf("list --all omitted delta-agent:\n%s", got.stdout)
+		t.Fatalf("default list omitted delta-agent:\n%s", got.stdout)
 	}
 	if models := byID["delta-agent"]["models"]; models != nil {
 		t.Errorf("agnostic delta-agent models = %v, want null", models)
@@ -276,7 +276,7 @@ func TestListDegradesOnModelsSchemaDrift(t *testing.T) {
 	srv := modelsServer(t, nil, "anthropic") // anthropic ships a malformed model
 	newScenario(t, srv.URL, "alpha-cli")
 
-	got := runCLI("--json", "agents", "list")
+	got := runCLI("--json", "agents", "list", "--installed")
 	if got.code != codeOK {
 		t.Fatalf("list on models schema drift exit = %d, want 0; stderr=%q", got.code, got.stderr)
 	}

@@ -161,13 +161,13 @@ func TestModelsListFieldsAuthoritativeOverOrderColumn(t *testing.T) {
 }
 
 func TestAgentsListDefaultGroupsFoundFirst(t *testing.T) {
-	// --all lists the not-found tail after detected agents; the default id ordering
-	// holds within each group, so the missing delta-agent trails.
+	// The default list places the not-found tail after detected agents; the default
+	// id ordering holds within each group, so the missing delta-agent trails.
 	newScenario(t, "", "alpha-cli", "beta-tool", "gamma-agent")
 
-	got := runCLI("--json", "agents", "list", "--all")
+	got := runCLI("--json", "agents", "list")
 	if got.code != codeOK {
-		t.Fatalf("agents list --all exit = %d, stderr=%q", got.code, got.stderr)
+		t.Fatalf("agents list exit = %d, stderr=%q", got.code, got.stderr)
 	}
 	order := modelIDOrder(t, got)
 	if order[len(order)-1] != "delta-agent" {
@@ -180,7 +180,7 @@ func TestAgentsListOrderByDropsFoundGrouping(t *testing.T) {
 	// missing delta-agent interleaves by id rather than trailing.
 	newScenario(t, "", "alpha-cli", "beta-tool", "gamma-agent")
 
-	got := runCLI("--json", "agents", "list", "--all", "--order-by", "id", "--reverse")
+	got := runCLI("--json", "agents", "list", "--order-by", "id", "--reverse")
 	if got.code != codeOK {
 		t.Fatalf("agents list --order-by id --reverse exit = %d, stderr=%q", got.code, got.stderr)
 	}

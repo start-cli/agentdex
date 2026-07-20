@@ -2,11 +2,14 @@
 
 ## Overview
 
-agentdex is a Go module that detects AI coding agents installed on the local
-machine and reports, for each known agent: where its binary lives, its installed
-version, its configuration directory, its skills directory, the model provider(s)
-it uses, and the models those providers offer (enriched from models.dev). It
-ships as a library (the primary artefact) plus a thin CLI.
+agentdex is a Go module that indexes AI coding agents together with the
+models.dev provider and model data that describes them, and detects which of
+those agents are installed on the local machine. For each known agent it
+reports: where its binary lives, its installed version, its configuration
+directory, its skills directory, the model provider(s) it uses, and the models
+those providers offer (enriched from models.dev); providers and models are
+browsable as data in their own right. It ships as a library (the primary
+artefact) plus a thin CLI.
 
 agentdex answers the "outside" questions about an agent: does it exist, where is
 it, where is its config, where do skills go, what can it run. It does not read or
@@ -700,7 +703,7 @@ group with two verbs, `list` to browse and `get` to fetch by exact id.
 ### Commands
 
 ```
-agentdex agents list [filter]               detected agents, table by default
+agentdex agents list [filter]               catalogued agents with detection; --installed narrows
 agentdex agents get <id>                    detail for one agent (aliases: view, show)
 agentdex providers list [filter]            models.dev providers usable with --provider
 agentdex providers get <id>                 detail for one provider

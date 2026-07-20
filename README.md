@@ -20,7 +20,7 @@ agentdex ships a thin command-line interface over the library.
 The CLI is organised as noun groups (`agents`, `models`, `providers`, each aliased to its singular) with two shared verbs, `list` and `get`.
 
 ```
-agentdex agents list [filter]     detected agents, table by default
+agentdex agents list [filter]     catalogued agents with detection; --installed narrows
 agentdex agents get <id>          detail for one agent (aliases: view, show)
 agentdex models list [filter]     models across providers, newest release first
 agentdex models get <id>          detail for one model, by provider-id/model-id
@@ -31,7 +31,7 @@ agentdex version
 agentdex completion               shell completion script
 ```
 
-`agents list` shows each agent's models.dev model count, served from the warm cache and degrading to zero (with a warning) when models.dev is unreachable; `--all` adds catalogued agents whose binary was not found. `agents get` reports provider-env presence by default; model fill is opt-in via `--models` or a `--fields` selection that includes `models`. `models list` scopes with `--provider` (models.dev provider ids) or `--agent` (a catalogued agent's providers).
+`agents list` lists the whole catalog with each agent's local detection status — the resolved binary in the `BIN` column, or `missing` when the binary was not found on `PATH` — and its models.dev model count, served from the warm cache and degrading to zero (with a warning) when models.dev is unreachable; `--installed` narrows the listing to the agents detected on this machine. `agents get` reports provider-env presence by default; model fill is opt-in via `--models` or a `--fields` selection that includes `models`. `models list` scopes with `--provider` (models.dev provider ids) or `--agent` (a catalogued agent's providers).
 
 Every `list` verb orders by `id` (`models list` by newest release date) and accepts `--order-by <field>` to sort by any field — for example `models list --order-by total` for combined price — with `--reverse` to flip the direction; the sort column is pulled leftmost so the ordering is legible. `--fields` selects output fields on any `list` or `get` verb. Global flags include `--json` (a `status`/`data`/`error`/`warnings` envelope), `--color auto|always|never`, `--search-dir`, and `--bin-path id=path`.
 

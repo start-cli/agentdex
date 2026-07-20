@@ -315,7 +315,7 @@ func TestListAgnosticProviderShowsCount(t *testing.T) {
 	// model array in JSON, a count in text, not the null/- marker.
 	newScenario(t, "", "delta-agent")
 
-	got := runCLI("--json", "agents", "list", "--provider", "anthropic")
+	got := runCLI("--json", "agents", "list", "--installed", "--provider", "anthropic")
 	if got.code != codeOK {
 		t.Fatalf("list --provider exit = %d, stderr=%q", got.code, got.stderr)
 	}

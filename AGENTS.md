@@ -1,6 +1,6 @@
 # agentdex
 
-agentdex is a Go library plus thin CLI that detects AI coding agents installed on the local machine and reports their binary, version, config and skills directories, providers, and (enriched from models.dev) available models. It owns the outside of an agent — identity, location, paths, version, capability — and never reads an agent's internal configuration. The full design is in `docs/agentdex-design.md`; project documents (`NN-*.md`) carry the slice of work each builds.
+agentdex is a Go library plus thin CLI that indexes AI coding agents together with the models.dev provider and model data that describes them, and detects which of those agents are installed on the local machine. For an agent it reports the binary, version, config and skills directories, providers, and available models (enriched from models.dev); providers and models are browsable as data in their own right. It owns the outside of an agent — identity, location, paths, version, capability — and never reads an agent's internal configuration. The full design is in `docs/agentdex-design.md`; project documents (`NN-*.md`) carry the slice of work each builds.
 
 ## Module layout
 
@@ -123,11 +123,14 @@ module clean.
 ### 4. Exercise through the library
 
 Point the loader at the local module with the `catalog.module` override rather
-than the registry, then confirm detection before publishing:
+than the registry, then confirm the new entry before publishing. `agents list`
+shows the whole catalog, so the added agent appears with its detection status
+even before it is installed; `--installed` narrows to the agents present on this
+machine:
 
 ```bash
-agentdex list
-agentdex get <id>
+agentdex agents list
+agentdex agents get <id>
 ```
 
 ### 5. Publish a new catalog version

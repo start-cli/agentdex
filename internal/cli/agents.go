@@ -20,7 +20,7 @@ import (
 // verb (get). The group itself is not runnable; a bare invocation is a usage fault.
 func (a *app) newAgentsCmd() *cobra.Command {
 	return a.newNounCmd(
-		"agents", "agent", "Detected AI coding agents",
+		"agents", "agent", "AI coding agents in the catalog and their local detection",
 		a.newAgentsListCmd(),
 		a.newAgentsGetCmd(),
 	)
@@ -28,7 +28,7 @@ func (a *app) newAgentsCmd() *cobra.Command {
 
 func (a *app) newAgentsListCmd() *cobra.Command {
 	var (
-		all       bool
+		installed bool
 		fields    []string
 		providers []string
 		orderBy   string
@@ -36,15 +36,17 @@ func (a *app) newAgentsListCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "list [filter]",
-		Short: "List detected agents",
-		Long: "List the AI coding agents detected on this machine. Each agent's model count " +
-			"is enriched from models.dev, served from the local cache when warm and degrading " +
-			"to zero when models.dev cannot be reached. Provider-agnostic agents show \"-\" " +
-			"unless --provider is given. --all adds the catalogued agents whose binary was " +
-			"not found, with \"missing\" in the BIN column. Detected agents lead and the rows " +
-			"are ordered by id by default; --order-by sorts by any field and --reverse flips the " +
-			"direction. An optional filter narrows the list to agents whose id or name contains " +
-			"it (case-insensitive); a filter matching nothing prints an empty listing and exits 0.",
+		Short: "List AI coding agents",
+		Long: "List the AI coding agents in the catalog with their local detection status: a " +
+			"detected agent shows its resolved binary in the BIN column, while an agent whose " +
+			"binary was not found on PATH shows \"missing\". --installed narrows the listing to the " +
+			"agents detected on this machine. Each agent's model count is enriched from models.dev, " +
+			"served from the local cache when warm and degrading to zero when models.dev cannot be " +
+			"reached. Provider-agnostic agents show \"-\" unless --provider is given. Detected agents " +
+			"lead and the rows are ordered by id by default; --order-by sorts by any field and " +
+			"--reverse flips the direction. An optional filter narrows the list to agents whose id or " +
+			"name contains it (case-insensitive); a filter matching nothing prints an empty listing " +
+			"and exits 0.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			cfg, err := a.requireConfig()
@@ -74,7 +76,7 @@ func (a *app) newAgentsListCmd() *cobra.Command {
 			if len(callerProviders) > 0 {
 				base = append(base, agentdex.WithProviders(callerProviders...))
 			}
-			if all {
+			if !installed {
 				base = append(base, agentdex.IncludeMissing())
 			}
 			// Probe models.dev once for reachability, reusing this client for the
@@ -119,7 +121,7 @@ func (a *app) newAgentsListCmd() *cobra.Command {
 			if filter != "" {
 				agents = filterAgents(agents, filter)
 			}
-			a.log.Debug("list detected agents", "count", len(agents), "all", all, "filter", filter)
+			a.log.Debug("list agents", "count", len(agents), "installed", installed, "filter", filter)
 
 			recs := make([]*record, len(agents))
 			for i := range agents {
@@ -138,8 +140,8 @@ func (a *app) newAgentsListCmd() *cobra.Command {
 				return a.usage(cmd, err)
 			}
 			if orderBy == "" {
-				// The default view groups detected agents ahead of the not-found tail
-				// (--all); the stable sort keeps the id ordering within each group.
+				// The default view groups detected agents ahead of the not-found tail;
+				// the stable sort keeps the id ordering within each group.
 				// An explicit --order-by is a pure field sort with no such grouping.
 				sort.SliceStable(recs, func(i, j int) bool { return recordFound(recs[i]) && !recordFound(recs[j]) })
 			}
@@ -161,9 +163,9 @@ func (a *app) newAgentsListCmd() *cobra.Command {
 			if err != nil {
 				return a.usage(cmd, err)
 			}
-			empty := "No agents detected."
-			if all {
-				empty = "No agents catalogued."
+			empty := "No agents catalogued."
+			if installed {
+				empty = "No agents detected."
 			}
 			return a.ok(cmd, data, warnings, func(w io.Writer) {
 				fmt.Fprintln(w)
@@ -171,7 +173,7 @@ func (a *app) newAgentsListCmd() *cobra.Command {
 			})
 		},
 	}
-	cmd.Flags().BoolVar(&all, "all", false, "Include catalogued agents that were not detected")
+	cmd.Flags().BoolVar(&installed, "installed", false, "Limit to agents detected on this machine")
 	cmd.Flags().StringSliceVar(&providers, "provider", nil, "models.dev provider ids for agnostic agents' model counts (repeatable or csv)")
 	registerFieldsFlag(cmd, &fields)
 	registerOrderFlags(cmd, &orderBy, &reverse)
@@ -188,7 +190,7 @@ func recordFound(r *record) bool {
 
 // filterAgents narrows detected agents to those whose id or name contains the
 // browse filter (case-insensitive), applied after detection so enrichment and the
-// --all/--provider/--verbose behaviour are unchanged by the filter.
+// --installed/--provider/--verbose behaviour are unchanged by the filter.
 func filterAgents(agents []agentdex.Agent, filter string) []agentdex.Agent {
 	needle := strings.ToLower(filter)
 	out := make([]agentdex.Agent, 0, len(agents))
@@ -240,7 +242,7 @@ func (a *app) newAgentsGetCmd() *cobra.Command {
 			id := args[0]
 			ka, ok := cat.Agents[id]
 			if !ok {
-				return a.fail(cmd, codeNotFound, fmt.Errorf("no agent %q; run \"agentdex agents list --all\" to see agent ids", id), warnings...)
+				return a.fail(cmd, codeNotFound, fmt.Errorf("no agent %q; run \"agentdex agents list\" to see agent ids", id), warnings...)
 			}
 			a.log.Debug("get resolved agent", "id", id)
 

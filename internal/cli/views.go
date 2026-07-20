@@ -24,7 +24,7 @@ var agentFieldSet = newFieldSet(
 // agentVerboseFields are the list table columns under --verbose: the default
 // columns widened with the global config dir. models sits between providers and
 // bin in both sets; bin stays last, the widest, most variable column, whose
-// "missing" cell is the list --all detection signal.
+// "missing" cell is the list detection signal.
 var agentVerboseFields = []string{"id", "name", "version", "config_dir", "providers", "models", "bin"}
 
 // agentRecord builds the field values for one detected agent. Optional fields that
@@ -45,8 +45,8 @@ func buildAgentRecord(a *agentdex.Agent, includeProviders bool) *record {
 	r.add("id", a.ID, a.ID)
 	r.add("name", a.Name, a.Name)
 	r.add("version", a.Version, orDash(a.Version))
-	// A not-found agent renders "missing" in the bin cell (the list --all
-	// detection signal); the JSON value stays blank with found carrying the fact.
+	// A not-found agent renders "missing" in the bin cell (the list detection
+	// signal); the JSON value stays blank with found carrying the fact.
 	binText := orDash(a.BinaryPath)
 	if !a.Found {
 		binText = "missing"
