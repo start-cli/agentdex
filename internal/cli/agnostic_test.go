@@ -144,21 +144,24 @@ func TestModelsProviderRejectedOnHomeProviderAgent(t *testing.T) {
 }
 
 func TestGetAgnosticSoftPathNotInstalled(t *testing.T) {
-	// Not-installed outranks soft path: exit 3 with the not-installed error, but
-	// the payload keeps the soft-path shape — outside facts, the three provider
-	// fields omitted, and the agnostic warning.
+	// Not installed is a status, not a miss: exit 0 with the soft-path shape —
+	// outside facts, the three provider fields omitted, the agnostic warning, and
+	// an added not-installed warning rather than an error.
 	newScenario(t, "") // delta binary not installed
 
 	got := runCLI("--json", "agents", "get", "delta-agent")
-	if got.code != codeNotFound {
-		t.Fatalf("get exit = %d, want %d; stderr=%q", got.code, codeNotFound, got.stderr)
+	if got.code != codeOK {
+		t.Fatalf("get exit = %d, want %d; stderr=%q", got.code, codeOK, got.stderr)
 	}
 	env := got.envelope(t)
-	if !strings.Contains(env.Error, "not installed") {
-		t.Errorf("envelope error = %q, want not-installed", env.Error)
+	if env.Status != "ok" || env.Error != "" {
+		t.Errorf("envelope status/error = %q/%q, want ok with no error", env.Status, env.Error)
 	}
 	if !anyContains(env.Warnings, "provider-agnostic") {
 		t.Errorf("expected a provider-agnostic warning, got %v", env.Warnings)
+	}
+	if !anyContains(env.Warnings, "not installed") {
+		t.Errorf("expected a not-installed warning, got %v", env.Warnings)
 	}
 	data := env.Data.(map[string]any)
 	for _, key := range []string{"providers", "provider_env", "models"} {
@@ -172,16 +175,23 @@ func TestGetAgnosticSoftPathNotInstalled(t *testing.T) {
 }
 
 func TestGetAgnosticProviderNotInstalled(t *testing.T) {
-	// With --provider and not Found: exit 3, providers carries the caller ids,
-	// provider_env and models stay omitted (no models.dev client until Found),
-	// and no soft-path warning — the caller already supplied providers.
+	// With --provider and not Found: exit 0 with a not-installed warning, providers
+	// carries the caller ids, provider_env and models stay omitted (no models.dev
+	// client until Found), and no soft-path warning — the caller already supplied
+	// providers.
 	newScenario(t, "") // delta binary not installed
 
 	got := runCLI("--json", "agents", "get", "delta-agent", "--provider", "anthropic")
-	if got.code != codeNotFound {
-		t.Fatalf("get --provider exit = %d, want %d; stderr=%q", got.code, codeNotFound, got.stderr)
+	if got.code != codeOK {
+		t.Fatalf("get --provider exit = %d, want %d; stderr=%q", got.code, codeOK, got.stderr)
 	}
 	env := got.envelope(t)
+	if env.Status != "ok" || env.Error != "" {
+		t.Errorf("envelope status/error = %q/%q, want ok with no error", env.Status, env.Error)
+	}
+	if !anyContains(env.Warnings, "not installed") {
+		t.Errorf("expected a not-installed warning, got %v", env.Warnings)
+	}
 	data := env.Data.(map[string]any)
 	provs, ok := data["providers"].([]any)
 	if !ok || len(provs) != 1 || provs[0] != "anthropic" {

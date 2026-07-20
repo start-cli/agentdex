@@ -246,15 +246,17 @@ func TestGetTopLevelSchemaIsDataErrorNotOutage(t *testing.T) {
 }
 
 func TestGetNotInstalled(t *testing.T) {
-	// A catalogued-but-not-installed agent still exits 3, but renders everything
-	// the catalog knows first: the detail with a "missing" bin to stdout, the
-	// error to stderr. Under --json the envelope carries both data and error.
+	// A catalogued agent is found in the catalog whether or not its binary is
+	// installed, so get is a success (exit 0): it renders everything the catalog
+	// knows with a "missing" bin, and warns that the agent is not installed
+	// rather than failing. Under --json the envelope carries data with the
+	// warning and no error.
 	srv := modelsServer(t, []string{"anthropic"})
 	newScenario(t, srv.URL) // no binaries installed
 
 	got := runCLI("agents", "get", "alpha-cli")
-	if got.code != codeNotFound {
-		t.Fatalf("not-installed exit = %d, want 3; stderr=%q", got.code, got.stderr)
+	if got.code != codeOK {
+		t.Fatalf("not-installed exit = %d, want 0; stderr=%q", got.code, got.stderr)
 	}
 	for _, want := range []string{"alpha-cli", "missing", ".alpha"} {
 		if !strings.Contains(got.stdout, want) {
@@ -262,20 +264,49 @@ func TestGetNotInstalled(t *testing.T) {
 		}
 	}
 	if !strings.Contains(got.stderr, "not installed") {
-		t.Errorf("not-installed error missing from stderr: %q", got.stderr)
+		t.Errorf("not-installed warning missing from stderr: %q", got.stderr)
 	}
 
 	js := runCLI("--json", "agents", "get", "alpha-cli")
-	if js.code != codeNotFound {
-		t.Fatalf("not-installed --json exit = %d, want 3", js.code)
+	if js.code != codeOK {
+		t.Fatalf("not-installed --json exit = %d, want 0", js.code)
 	}
 	env := js.envelope(t)
-	if env.Status != "error" || !strings.Contains(env.Error, "not installed") {
-		t.Errorf("envelope status/error = %q/%q, want error naming not installed", env.Status, env.Error)
+	if env.Status != "ok" || env.Error != "" {
+		t.Errorf("envelope status/error = %q/%q, want ok with no error", env.Status, env.Error)
+	}
+	if !anyContains(env.Warnings, "not installed") {
+		t.Errorf("envelope warnings = %v, want one naming not installed", env.Warnings)
 	}
 	data, ok := env.Data.(map[string]any)
 	if !ok || data["found"] != false || data["bin"] != "" {
 		t.Errorf("envelope data = %v, want found=false with blank bin", env.Data)
+	}
+}
+
+func TestGetNotInstalledEnrichmentOmissionWarning(t *testing.T) {
+	// Requesting a models.dev-backed field on a not-installed agent names the
+	// omission in the warning, since the round-trip that fills it is skipped;
+	// requesting only offline catalog fields warns not-installed without the note.
+	srv := modelsServer(t, []string{"anthropic"})
+	newScenario(t, srv.URL) // no binaries installed
+
+	enrich := runCLI("--json", "agents", "get", "alpha-cli", "--models")
+	if enrich.code != codeOK {
+		t.Fatalf("--models not-installed exit = %d, want 0; stderr=%q", enrich.code, enrich.stderr)
+	}
+	if !anyContains(enrich.envelope(t).Warnings, "not installed: models and provider-env omitted") {
+		t.Errorf("--models not-installed warnings = %v, want the omission note", enrich.envelope(t).Warnings)
+	}
+
+	offline := runCLI("--json", "agents", "get", "alpha-cli", "--fields", "bin")
+	if offline.code != codeOK {
+		t.Fatalf("--fields bin not-installed exit = %d, want 0; stderr=%q", offline.code, offline.stderr)
+	}
+	for _, w := range offline.envelope(t).Warnings {
+		if strings.Contains(w, "omitted") {
+			t.Errorf("offline --fields selection should not warn of enrichment omission: %q", w)
+		}
 	}
 }
 

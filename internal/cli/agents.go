@@ -269,12 +269,20 @@ func (a *app) newAgentsGetCmd() *cobra.Command {
 				return a.fail(cmd, codeFor(err), err, warnings...)
 			}
 			if !found {
-				// A not-installed agent triggers no models.dev round-trip, so an
-				// agnostic agent's caller-supplied providers are reported here as-is,
-				// unvalidated; unknown ids are rejected only on the Found path
-				// (getAgnosticEnrich). The catalogued detail still reports.
-				err := fmt.Errorf("agent %q (%s) is catalogued but not installed", id, agent.Name)
-				return a.reportAgentError(cmd, agent, fields, codeNotFound, err, warnings)
+				// Not installed is a detection status, not a catalog miss: the lookup
+				// already succeeded, so report the agent at exit 0 and warn. A
+				// not-installed agent triggers no models.dev round-trip, so an agnostic
+				// agent's caller-supplied providers are reported here as-is, unvalidated;
+				// unknown ids are rejected only on the Found path (getAgnosticEnrich).
+				msg := fmt.Sprintf("agent %q is catalogued but not installed", id)
+				if models || modelsDevDemand(fields) {
+					// The requested models.dev-backed fields need the detected binary's
+					// round-trip that not-installed skips, so name the omission rather
+					// than dropping it silently, matching the unreachable-degrade warnings.
+					msg += ": models and provider-env omitted"
+				}
+				warnings = append(warnings, msg)
+				return a.reportAgent(cmd, agent, fields, warnings)
 			}
 
 			// Non-models.dev field selection: offline catalog facts only. An
@@ -351,8 +359,9 @@ func modelsDevDemand(fields []string) bool {
 
 // getAgnosticSoftPath is unfiltered get on an agnostic agent without --provider:
 // outside facts only, omit the three provider-related fields, warn how to enrich.
-// Exit 0 when Found; exit 3 with the not-installed error when not Found. The
-// soft path is structurally unfiltered — a --fields selection never enters it.
+// Exit 0 whether or not the binary is installed; a not-installed agent adds a
+// warning rather than failing. The soft path is structurally unfiltered — a
+// --fields selection never enters it.
 func (a *app) getAgnosticSoftPath(cmd *cobra.Command, cfg *config.Config, flags config.Flags, cat *agentdex.Catalog, id string, warnings []string) error {
 	detectOpts := append(cfg.LibraryOptions(flags), agentdex.WithCatalog(cat))
 	agent, found, err := agentdex.DetectOne(cmd.Context(), id, detectOpts...)
@@ -361,8 +370,7 @@ func (a *app) getAgnosticSoftPath(cmd *cobra.Command, cfg *config.Config, flags 
 	}
 	warnings = append(warnings, fmt.Sprintf("%q is provider-agnostic: supply --provider with models.dev provider ids to enrich providers, provider-env, and models", id))
 	if !found {
-		err := fmt.Errorf("agent %q (%s) is catalogued but not installed", id, agent.Name)
-		return a.reportSoftPathAgentError(cmd, agent, codeNotFound, err, warnings)
+		warnings = append(warnings, fmt.Sprintf("agent %q is catalogued but not installed", id))
 	}
 	return a.reportSoftPathAgent(cmd, agent, warnings)
 }
@@ -545,15 +553,6 @@ func (a *app) reportSoftPathAgent(cmd *cobra.Command, agent *agentdex.Agent, war
 	return a.ok(cmd, jsonObject(fs), warnings, func(w io.Writer) {
 		renderAgentDetailFields(w, r, agent, a.verbose)
 	})
-}
-
-// reportSoftPathAgentError is reportSoftPathAgent for not-installed (exit 3).
-func (a *app) reportSoftPathAgentError(cmd *cobra.Command, agent *agentdex.Agent, code int, cause error, warnings []string) error {
-	r := agentRecordWithoutProviders(agent)
-	fs, _ := r.resolve(nil)
-	return a.failData(cmd, code, cause, jsonObject(fs), func(w io.Writer) {
-		renderAgentDetailFields(w, r, agent, a.verbose)
-	}, warnings)
 }
 
 // detailSections are the record fields rendered as their own labelled sections

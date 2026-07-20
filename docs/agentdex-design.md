@@ -681,6 +681,9 @@ per-provider verdicts:
 
 An id that names no catalogued agent is a plain exact miss: not-found (exit 3), with no
 provider fallthrough. Provider discovery lives in `providers list` and `providers get`.
+A catalogued agent whose binary is not installed is not a miss: the catalog lookup
+succeeded, so get reports the agent detail with a not-installed warning at exit 0,
+the same detection status `list` shows for it. Not-installed is a status, not a failure.
 
 The split is deliberate: get is detection and enrichment, not validation, so a
 working multi-provider agent stays at exit 0 even when one provider is missing
