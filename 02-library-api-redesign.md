@@ -225,6 +225,7 @@ type Agent struct {
 type AgentDetail struct {
     Agent
     Coverage ProviderCoverage
+    Warnings []Warning // stale catalog, not-installed, coverage degrade, and agnostic-guidance warnings for this fetch
 }
 
 type Detection struct {
@@ -236,8 +237,8 @@ type Detection struct {
 }
 
 type Provider struct {
-    modelsdev.Provider                 // embedded; carries Models
-    Env                map[string]bool // API-key env var -> present in the environment
+    modelsdev.Provider                    // embedded; carries the env-var names and Models
+    EnvPresent         map[string]bool    // API-key env var -> present in the environment
 }
 
 type Model struct {
@@ -334,11 +335,22 @@ const (
 )
 ```
 
-When the loaded catalog is a stale fallback (`CatalogStale()` is true), every
-`Result` and every `Detail` the library returns must include a
-`WarnStaleCatalog` warning. Enrichment failures (models.dev unreachable and
-uncached, or recognisable schema drift) never fail a `List`; they degrade the
-result and attach the matching warning. The message wording carried in `Warning.Msg`
+Warnings ride on the returns of the operations that raise them. Every `Result`
+carries a `Warnings` slice, and `AgentDetail` carries one; `Providers.Get` and
+`Models.Get` return their bare embedded type with no warnings channel, because
+they load no agent catalog and emit none of the enrichment, coverage, or
+not-installed conditions. `AgentDetail` is the one detail type with a `Warnings`
+field: agent detail is the only exact fetch that resolves the catalog, probes
+coverage, and can be not-installed.
+
+When the loaded catalog is a stale fallback (`CatalogStale()` is true), the
+return of every operation that resolved the agent catalog must include a
+`WarnStaleCatalog` warning: the `Result` from `Agents.List` and from
+`Models.List` scoped by agent, and the `AgentDetail.Warnings` from `Agents.Get`.
+A pure models.dev operation loads no catalog, so it has no stale state to report
+and none to inject. Enrichment failures (models.dev unreachable and uncached, or
+recognisable schema drift) never fail a `List`; they degrade the result and
+attach the matching warning. The message wording carried in `Warning.Msg`
 is the library's to own, and each message is preserved verbatim from the string
 the CLI emits for that condition today, so the retained CLI end-to-end tests pass
 their warning assertions unchanged.
@@ -368,20 +380,36 @@ propagated `modelsdev.ErrModelsSchema` from `Provider`/`Model` operations and as
 ### R8 Scope resolution and agnostic rules in the library
 
 The library owns the agnostic/home-provider rules; they must not live in the CLI.
-Applied uniformly across agent and model operations:
+The home-provider and explicit-provider rules hold everywhere:
 
 - Home-provider agent, no explicit providers: enrich against the agent's catalog
   providers.
 - Home-provider agent, explicit providers supplied: `ErrProvidersNotAllowed`.
 - Agnostic agent, providers supplied: validate each id against models.dev
   (`ErrUnknownProvider` on a miss); enrich against them.
+
+The agnostic-without-providers case splits by operation shape, mirroring the
+single-versus-multi distinction detection already draws (`DetectOne` hard-fails
+where multi-agent `Detect` soft-skips).
+
+Single-target resolution — `Agents.Get`, and `Models.List` scoped by `--agent`:
+
 - Agnostic agent, no providers, `Enrich == EnrichNone`: return outside facts only
   (no providers, provider_env, or models), with a `WarnProvidersRequired`
   warning. `Enrichment` is `EnrichNotApplicable`.
 - Agnostic agent, no providers, `Enrich != EnrichNone`: `ErrProvidersRequired`.
 
+List resolution — `Agents.List`:
+
+- Agnostic agent, no providers, any `Enrich`: never an error. The agent is
+  returned with `Enrichment == EnrichNotApplicable` and no models data, and the
+  `Result` gains no per-agent warning. The not-applicable state is the whole
+  signal; the CLI renders it as the `-` cell, matching today's silent listing.
+
 `Models.List` with `ModelQuery.Scope.Agent` set resolves the agent to its
-provider set by the same rules; an unknown agent id is `ErrAgentUnknown`. With no
+provider set by the single-target rules above; a model listing always needs a
+resolved provider set, so an agnostic `--agent` with no providers is
+`ErrProvidersRequired`, and an unknown agent id is `ErrAgentUnknown`. With no
 agent and no providers, the listing spans every provider models.dev knows.
 Caller-supplied provider ids are validated in every role they play.
 
@@ -399,8 +427,8 @@ provider-agnostic map, else `""`.
 
 Provider env-var presence is read at the boundary through an injectable lookup so
 record building is testable from inputs. `Open` accepts `WithEnvLookup(func(string) (string, bool))`,
-defaulting to `os.LookupEnv`. Only presence is read, never the value. `Provider.Env`
-and `Agent.ProviderEnv` are populated through this lookup.
+defaulting to `os.LookupEnv`. Only presence is read, never the value.
+`Provider.EnvPresent` and `Agent.ProviderEnv` are populated through this lookup.
 
 ### R11 Options for Open
 
@@ -650,7 +678,8 @@ logic leaves the CLI.
    `resolveModelsScope`, `modelsList`, and `modelsGet` out of the CLI.
 
 6. Implement `Index.Refresh` and `Index.CatalogStale`, and the automatic
-   `WarnStaleCatalog` injection into every `Result` and detail (R6, R13).
+   `WarnStaleCatalog` injection into the `Result` and `AgentDetail` returns of the
+   catalog-resolving operations (R6, R13).
 
 7. Remove the old public API (R1) and relocate the detection, probe, resolve,
    enrich, and version mechanics to unexported scope or `internal/`. Confirm the
@@ -712,12 +741,15 @@ tests.
 4. The agnostic and home-provider rules of R8 are enforced in the library and
    surfaced through `ErrProvidersRequired`, `ErrProvidersNotAllowed`, and
    `ErrUnknownProvider`.
-5. A stale catalog surfaces as a `WarnStaleCatalog` warning on every `Result` and
-   detail, and `Index.CatalogStale()` reports true.
-6. An agnostic agent listed or fetched without a provider set carries
-   `EnrichmentState == EnrichNotApplicable`; a models.dev outage on a count
-   enrichment carries `EnrichmentState == EnrichDegraded`; neither fails the
-   operation.
+5. A stale catalog surfaces as a `WarnStaleCatalog` warning on the returns of the
+   operations that resolve the agent catalog — the `Result` from `Agents.List` and
+   `Models.List` scoped by agent, and `Agents.Get`'s `AgentDetail.Warnings` — and
+   `Index.CatalogStale()` reports true.
+6. An agnostic agent in a listing, and one fetched with `Enrich == EnrichNone` and
+   no provider set, carries `EnrichmentState == EnrichNotApplicable` and does not
+   fail; a fetch that demands enrichment without a provider set is
+   `ErrProvidersRequired`; a models.dev outage on a count enrichment carries
+   `EnrichmentState == EnrichDegraded` and does not fail the operation.
 7. `Models.Get` resolves a composite by first-slash split with the R9 error
    behaviour, and fills `CanonicalID` from the models.dev agnostic map.
 8. `Open` exposes `WithLogger`, defaults to a discard handler when it is not
