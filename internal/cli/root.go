@@ -48,10 +48,12 @@ func NewRootCommand() *cobra.Command {
 	a := &app{}
 	root := &cobra.Command{
 		Use:   "agentdex",
-		Short: "Detect AI coding agents installed on this machine",
-		Long: "agentdex detects AI coding agents installed on the local machine and " +
-			"reports their binary, version, config and skills directories, providers, " +
-			"and models available from models.dev.",
+		Short: "Browse AI coding agents, providers, and models as data",
+		Long: "agentdex indexes AI coding agents, the models.dev providers that power " +
+			"them, and the models those providers offer, and serves all three as " +
+			"browsable data. For an agent it reports the binary, version, config and " +
+			"skills directories, providers, and available models, and whether it is " +
+			"installed on the local machine.",
 		SilenceUsage:      true,
 		SilenceErrors:     true,
 		PersistentPreRunE: a.preRun,
@@ -63,10 +65,6 @@ func NewRootCommand() *cobra.Command {
 	f.BoolVar(&a.quiet, "quiet", false, "Suppress non-essential output")
 	f.StringVar(&a.color, "color", "auto", "Colour output: auto, always, never")
 	f.BoolVar(&a.debug, "debug", false, "Diagnostic logging to stderr")
-	// StringArray, not StringSlice: a directory path can legally contain a comma,
-	// so values are taken literally rather than csv-split, matching --bin-path.
-	f.StringArrayVar(&a.searchDirs, "search-dir", nil, "Extra binary search locations (repeatable)")
-	f.StringArrayVar(&a.binPaths, "bin-path", nil, "Override an agent's binary path as id=path (repeatable)")
 
 	// A single named group keeps the real commands together in help, leaving
 	// cobra's help and completion under Additional Commands.

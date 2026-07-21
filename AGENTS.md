@@ -1,12 +1,12 @@
 # agentdex
 
-agentdex is a Go library plus thin CLI that indexes AI coding agents together with the models.dev provider and model data that describes them, and detects which of those agents are installed on the local machine. For an agent it reports the binary, version, config and skills directories, providers, and available models (enriched from models.dev); providers and models are browsable as data in their own right. It owns the outside of an agent — identity, location, paths, version, capability — and never reads an agent's internal configuration. Project documents (`NN-*.md`) carry the slice of work each builds.
+agentdex is a Go library plus thin CLI that indexes three kinds of data — AI coding agents, the models.dev providers that power them, and the models those providers offer — and serves all three as browsable data. For an agent it reports the binary, version, config and skills directories, providers, and available models (enriched from models.dev), and whether it is installed on the local machine; providers and models are browsable in their own right. It owns the outside of an agent — identity, location, paths, version, capability — and never reads an agent's internal configuration. Project documents (`NN-*.md`) carry the slice of work each builds.
 
 ## Module layout
 
 The repository hosts two independent module systems that do not interfere:
 
-- Go module at the repository root: `github.com/start-cli/agentdex`. The detection library (root package `agentdex`), the public models.dev subpackage (`modelsdev/`), private subsystems under `internal/`, and the CLI under `cmd/agentdex/`.
+- Go module at the repository root: `github.com/start-cli/agentdex`. The index library (root package `agentdex`), the public models.dev subpackage (`modelsdev/`), private subsystems under `internal/`, and the CLI under `cmd/agentdex/`.
 - CUE module under `catalog/`: `github.com/start-cli/agentdex/catalog@v1`. The `#KnownAgent` schema and the agent catalog data, published to the CUE Central Registry and fetched at runtime. It is versioned and published independently of the Go binary.
 
 The Go build ignores `catalog/`; the CUE module is a self-contained CUE module with its own `cue.mod/module.cue`.

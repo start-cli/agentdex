@@ -14,10 +14,10 @@ import (
 )
 
 // newProvidersCmd is the providers noun group: a browse verb (list) and an exact
-// fetch verb (get) over the models.dev providers agentdex can enrich against.
+// fetch verb (get) over the model providers models.dev knows.
 func (a *app) newProvidersCmd() *cobra.Command {
 	return a.newNounCmd(
-		"providers", "provider", "models.dev providers agentdex can enrich against",
+		"providers", "provider", "Model providers from models.dev and their API-key status",
 		a.newProvidersListCmd(),
 		a.newProvidersGetCmd(),
 	)
@@ -31,7 +31,7 @@ func (a *app) newProvidersListCmd() *cobra.Command {
 	)
 	cmd := &cobra.Command{
 		Use:   "list [filter]",
-		Short: "List the models.dev providers agentdex can enrich against",
+		Short: "List model providers from models.dev",
 		Long: "List the models.dev providers usable with --provider on agents and models, " +
 			"with each provider's id, display name, API-key environment variables and whether they " +
 			"are set, and its model count. Rows are ordered by id by default; --order-by sorts by " +

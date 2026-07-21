@@ -101,8 +101,9 @@ reconstructable from the new library data:
 
 There is one existing project document, `01-theme-safe-terminal-path-colour.md`.
 The repository has no standing library-API design document; `README.md` and
-`AGENTS.md` are the API-describing documents, and both currently describe the
-detection-first framing.
+`AGENTS.md` are the API-describing documents. Their project framing already
+presents the data-first noun model (agents, providers, models), but neither yet
+describes the new library surface this project introduces.
 
 The behaviour that this project must preserve is encoded in the existing test
 suites, which are the parity oracle for the rewrite:

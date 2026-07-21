@@ -19,11 +19,20 @@ import (
 // newAgentsCmd is the agents noun group: a browse verb (list) and an exact fetch
 // verb (get). The group itself is not runnable; a bare invocation is a usage fault.
 func (a *app) newAgentsCmd() *cobra.Command {
-	return a.newNounCmd(
+	cmd := a.newNounCmd(
 		"agents", "agent", "AI coding agents in the catalog and their local detection",
 		a.newAgentsListCmd(),
 		a.newAgentsGetCmd(),
 	)
+	// --search-dir and --bin-path steer agent binary resolution, so they belong to
+	// the agents group rather than the root, where they would surface on the provider
+	// and model commands that resolve no binary.
+	f := cmd.PersistentFlags()
+	// StringArray, not StringSlice: a directory path can legally contain a comma, so
+	// values are taken literally rather than csv-split, matching --bin-path.
+	f.StringArrayVar(&a.searchDirs, "search-dir", nil, "Extra binary search locations (repeatable)")
+	f.StringArrayVar(&a.binPaths, "bin-path", nil, "Override an agent's binary path as id=path (repeatable)")
+	return cmd
 }
 
 func (a *app) newAgentsListCmd() *cobra.Command {
