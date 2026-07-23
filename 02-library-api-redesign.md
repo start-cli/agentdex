@@ -35,12 +35,13 @@ Out of scope:
   public face; it does not change what they compute.
 - The CLI's observable behaviour: command tree, flags, JSON envelope shape, exit
   codes, warning wording, ordering defaults, `--fields`, and empty-state
-  messages remain as they are today, with the three exceptions named in
+  messages remain as they are today, with the four exceptions named in
   Constraints — agent detail on a not-installed agent, which stops short-circuiting
   enrichment and answers what an agent offers before it is installed (R4), the
-  removal of the `disabled_agents` config key (R11), and the models table's
+  removal of the `disabled_agents` config key (R11), the models table's
   provider column, decided from the returned rows rather than the requested
-  scope (R15).
+  scope (R15), and the order of an agent's model array in the agents listing,
+  now the library's one newest-first order (R14).
 - The `version` and `completion` commands. They carry no library policy and are
   unchanged, save for whatever the mechanical switch to the new entry point
   requires of the shared command wiring.
@@ -315,7 +316,7 @@ type Enrich int
 const (
     EnrichNone      Enrich = iota // catalog and detection facts only
     EnrichProviders               // + the resolved provider set
-    EnrichCount                   // + ProviderEnv, ProviderCoverage, and ModelCount
+    EnrichCount                   // + ProviderEnv and ModelCount (and coverage on Agents.Get)
     EnrichFull                    // + the full Models list
 )
 ```
@@ -342,17 +343,30 @@ reported (`ErrUnknownProvider` on a miss) and the level does contact models.dev.
 This asymmetry is the point of the level: the resolved provider set is the one
 fact whose source differs by agent kind.
 
-`EnrichCount` and `EnrichFull` are models.dev-backed for every agent: both fill
-`ProviderEnv` and `ProviderCoverage`, `EnrichCount` adds `ModelCount`, and
-`EnrichFull` adds `Models`. What separates them is the models list, not the
-round-trip: models.dev arrives as one document, so both levels pay the same fetch
-and `EnrichCount` is the level for a caller that wants provider-env and coverage
-without a models list attached to every agent. That is what an unfiltered agent
-detail needs, which reports provider-env and coverage and carries no models until
-they are asked for. `ModelCount` is the summary fact that level can hand over for
-free; it is not the source of any count the CLI renders. The levels that save the
-fetch are the two below: `EnrichNone`, and `EnrichProviders` over home-provider
-agents.
+`EnrichCount` and `EnrichFull` are models.dev-backed for every agent the
+operation resolved a provider set for: both fill `ProviderEnv`, `EnrichCount`
+adds `ModelCount`, and `EnrichFull` adds `Models`.
+What separates them is the models list, not the round-trip: models.dev arrives as
+one document, so both levels pay the same fetch and `EnrichCount` is the level for
+a caller that wants provider-env without a models list attached to every agent.
+That is what an unfiltered agent detail needs, which reports provider-env and
+coverage and carries no models until they are asked for. `ModelCount` is the
+summary fact that level can hand over for free; it is not the source of any count
+the CLI renders. Three cases save the fetch: `EnrichNone`, `EnrichProviders` over
+home-provider agents, and — at every level — an `Agents.Get` on an agnostic agent
+with no provider set, which R8 settles as `EnrichNotApplicable` from catalog data
+alone and so has nothing left to ask models.dev.
+
+Provider coverage is the one thing these levels do not attach to every agent. It
+is a verdict on a single agent's provider set, and `AgentDetail` is the only type
+that carries it (R3), so `Agents.Get` alone computes it — at `EnrichCount` and
+above, per R5. The level still governs whether it is computed at all; what it does
+not do is put a coverage probe behind every row of a listing. `Agents.List`
+therefore probes no coverage at any level, reaches no `CoverageSomePresent`
+verdict, and raises no `WarnSomeProvidersAbsent` warning, which is what it does
+today: a listing has no room to report which of an agent's providers went missing,
+and the per-agent rollup it would have to run is one models.dev round-trip per
+provider per row for a fact nothing renders.
 
 Installation status gates none of this. Detection decides `Found`, `BinaryPath`,
 and `Version`, and nothing else: the provider set is catalog data, the models are
@@ -385,8 +399,11 @@ A caller distinguishes an agnostic agent shown without a provider set
 `EnrichDegraded` covers both ways models.dev can come up short: unreachable and
 uncached, and reachable but serving data agentdex cannot parse. The state answers
 one question — can this count be trusted — and both faults answer it the same way,
-so they share the state; the accompanying warning kind says which fault it was
-(`WarnModelsUnreachable` or `WarnModelsSchemaDrift`, R6). Encoding drift as
+so they share the state; which fault it was is said alongside. On `Agents.List`
+that is the warning kind, `WarnModelsUnreachable` or `WarnModelsSchemaDrift` (R6).
+On `Agents.Get` it is the coverage verdict, `CoverageUnreachable` or
+`CoverageSchemaDrift` with the fault in `Coverage.Err` (R5), which is what lets
+the caller exit non-zero on drift while still reporting the agent. Encoding drift as
 `EnrichApplied` instead would make an unparseable catalog indistinguishable from
 an agent that genuinely offers no models, which is the ambiguity this type exists
 to remove.
@@ -406,6 +423,7 @@ type ProviderCoverage struct {
     Present []string
     Absent  []string
     Status  CoverageStatus
+    Err     error // the models.dev fault behind CoverageUnreachable and CoverageSchemaDrift; nil otherwise
 }
 
 type CoverageStatus int
@@ -433,6 +451,18 @@ able to tell "nothing was asked" from "the answer was yes", and an
 `AgentDetail` whose zero-valued coverage read as `CoverageAllPresent` would
 assert a models.dev result nothing checked. `Present` and `Absent` are empty at
 this status.
+
+The two fault verdicts carry their cause in `Err`, because the status alone does
+not describe them. `CoverageNonePresent` is fully described by the struct — the
+fault is that every provider is absent, and `Absent` names them — so a caller
+rebuilds its message from the data. `CoverageSchemaDrift` is not: the fault
+happened inside models.dev's decode and only the error says what failed to parse,
+which is the one thing an operator needs when models.dev changes shape.
+`CoverageUnreachable` carries its cause on the same terms. `Err` wraps the
+`modelsdev` error, so `errors.Is(cov.Err, modelsdev.ErrModelsSchema)` holds and
+the drift row of the exit-code table (R15) is read the same way on agent detail as
+on the `Providers` and `Models` operations that surface drift as a returned error
+(R7). It stays nil on every other status, including `CoverageNotProbed`.
 
 There is no empty-provider-set verdict, because no path reaches one. The coverage
 set is the catalog provider list for a home-provider agent, and the schema makes
@@ -471,6 +501,35 @@ they load no agent catalog and emit none of the enrichment, coverage, or
 not-installed conditions. `AgentDetail` is the one detail type with a `Warnings`
 field: agent detail is the only exact fetch that resolves the catalog, probes
 coverage, and can be not-installed.
+
+The warnings channel is valid on the error return as well as the success return.
+An operation that accumulated warnings before it failed returns them: `Agents.List`
+and `Models.List` return a `Result` whose `Warnings` is populated with `Items`
+empty, and `Agents.Get` returns an `AgentDetail` whose `Warnings` is populated
+with no agent data. A caller reads `Warnings` unconditionally and reads `Items`,
+or the agent, only when the error is nil.
+
+The catalog is resolved before the id is looked up or the provider set is checked,
+so a stale fallback is already known by the time `Agents.Get` raises
+`ErrAgentUnknown`, `Agents.List` raises `ErrUnknownProvider` from its boundary
+validation, or `Models.List` raises `ErrProvidersRequired` on an agnostic scope.
+Every one of those failures carries the staleness into the JSON envelope's
+`warnings` key today, and that key is part of the fixed contract, so an operation
+that dropped its warnings on the way out would silently shrink it.
+`Index.CatalogStale` is not the answer: it costs a second call on every failure
+path, it reports staleness alone, and it would put warning assembly back in the
+caller. The rule is stated once here and holds for any warning an operation raises
+before failing, not for staleness alone.
+
+`WarnSomeProvidersAbsent`, `WarnNotInstalled`, and `WarnProvidersRequired` are
+raised by `Agents.Get` alone. The first follows coverage, which only agent detail
+probes (R4); the other two are conditions a listing states through data instead —
+`Detection.Found` on the row, and `EnrichNotApplicable` on the agnostic row that
+R8 leaves silent. `WarnModelsSchemaDrift` is raised by `Agents.List` alone, since
+agent detail reports drift through the coverage verdict and its `Coverage.Err`
+(R5), which the caller maps to a failure rather than a warning. `WarnStaleCatalog`
+and `WarnModelsUnreachable` are raised by both surfaces, in their own wording per
+the table below.
 
 When the loaded catalog is a stale fallback (`CatalogStale` reports true), the
 return of every operation that resolved the agent catalog must include a
@@ -532,6 +591,7 @@ The exported sentinels are:
 ```go
 var (
     ErrCatalogUnavailable = errors.New(...) // cold offline, no previously resolved catalog version
+    ErrCatalogInvalid     = errors.New(...) // the catalog module loaded but failed schema evaluation
     ErrModelsUnavailable  = errors.New(...) // models.dev unreachable and uncached on a Providers/Models operation
     ErrAgentUnknown       = errors.New(...) // agent id not in the catalog
     ErrUnknownProvider    = errors.New(...) // provider id not known to models.dev
@@ -544,9 +604,23 @@ var (
 
 `ErrModelNotFound` and `ErrModelAmbiguous` from the current surface are removed;
 model lookup is now the exact composite `Get` (R9), which uses `ErrNotFound` and
-`ErrMalformedModelID`. Recognisable models.dev schema drift surfaces as the
-propagated `modelsdev.ErrModelsSchema` from `Provider`/`Model` operations and as
-`WarnModelsSchemaDrift` on degraded agent lists.
+`ErrMalformedModelID`. Recognisable models.dev schema drift surfaces three ways,
+one per surface, each wrapping `modelsdev.ErrModelsSchema` so `errors.Is` resolves
+it uniformly: as the propagated error from `Provider`/`Model` operations, as
+`WarnModelsSchemaDrift` on a degraded agent list, and as `CoverageSchemaDrift`
+with the fault in `Coverage.Err` on agent detail (R5).
+
+`ErrCatalogInvalid` is the catalog's analog of models.dev schema drift, and it is
+distinct from `ErrCatalogUnavailable`: the module was obtained and then failed to
+evaluate, so the fault is the data rather than the network. The loader already
+tells the two apart; this names the second one publicly, as
+`ErrCatalogUnavailable` already names the first. The error wraps the loader's CUE
+diagnostic, which is the only thing that says which entry and which field failed,
+and the CLI emits that text unchanged — the diagnostic names a file the user
+edited, so there is no remedy clause for the CLI to add. It is the fault a
+catalog loaded through `WithCatalogDir` raises on an entry the schema rejects
+(R11), and it is unreachable through a published catalog that validated before it
+was published.
 
 A non-schema models.dev fetch failure (unreachable and uncached) on a `Providers`
 or `Models` operation surfaces as `ErrModelsUnavailable`, the models.dev analog of
@@ -554,6 +628,36 @@ or `Models` operation surfaces as `ErrModelsUnavailable`, the models.dev analog 
 agentdex boundary, so `modelsdev` stays unchanged (R16). Agent operations do not
 return it: a models.dev outage there degrades the result with `EnrichDegraded` and
 a `WarnModelsUnreachable` warning (R4, R6) rather than failing.
+
+The wording a user reads for these conditions splits between the library and its
+caller on the rule R6 sets for warnings: the library states the condition and
+names the identifiers involved, and the caller supplies any clause that names
+something only it has — a flag, a subcommand, an interface affordance. A library
+that formatted the whole sentence would tell a second caller's user to pass
+`--provider` or to run `agentdex agents list`, which is the vocabulary R6 keeps
+out of the library; one that returned a bare sentinel would leave its own callers
+with `unknown agent id` and no id. Each condition below raises a message the CLI
+emits today, so the split is fixed per condition and the emitted string is
+unchanged; the conditions absent from the table carry no CLI-composed wording and
+are emitted as the library sets them:
+
+| Condition | Library error text | CLI-emitted string |
+|---|---|---|
+| `ErrProvidersRequired` | `providers required for agnostic agent: "<id>" is provider-agnostic` | library text + `; supply --provider with models.dev provider ids` |
+| `ErrProvidersNotAllowed` | `agent "<id>" has catalog providers` | `agent "<id>" has catalog providers; --provider is only valid for provider-agnostic agents` |
+| `ErrAgentUnknown` | `no agent "<id>"` | `no agent "<id>"; run "agentdex agents list" to see agent ids` |
+| `ErrMalformedModelID` | `model id "<x>" must be provider-id/model-id` | + `; run "agentdex models list" to see model ids` |
+| `ErrNotFound`, provider get | `no models.dev provider "<id>"` | + `; run "agentdex providers list" to see provider ids` |
+| `ErrNotFound`, composite naming an unknown provider | `no model "<x>": unknown provider "<p>"` | library text, unchanged |
+| `ErrNotFound`, composite naming an unknown model key | `no model "<x>" in provider "<p>"` | library text, unchanged |
+
+`ErrNotFound` covers three misses, and the library's text is what tells them
+apart, so the two composite messages are complete as the library sets them and
+are emitted verbatim. The CLI renders the sentence and returns its exit code
+(`internal/cli`'s `exitError` carries the code alone), so a message it composes
+itself needs no re-wrapping of the sentinel: the sentinel it received decides the
+code, and the sentence it emits is its own. The exit-code mapping is unchanged
+(R15).
 
 ### R8 Scope resolution and agnostic rules in the library
 
@@ -605,7 +709,9 @@ Agent detail resolution — `Agents.Get`:
   id against models.dev and resolve against them.
 - Agnostic agent, no providers, `Enrich >= EnrichProviders`: never an error.
   Outside facts only (no providers, provider_env, coverage, or models), with
-  `Enrichment == EnrichNotApplicable` and a `WarnProvidersRequired` warning. A
+  `Enrichment == EnrichNotApplicable` and a `WarnProvidersRequired` warning. The
+  verdict comes from the catalog entry alone, so it is reached with no models.dev
+  round-trip at any level (R12). A
   caller that treats an explicitly requested but unfillable field as a fault maps
   the not-applicable state itself; the library reports the state, not a verdict
   on it (R15).
@@ -647,15 +753,15 @@ contain slashes; a provider id never does). A value with no slash is
 that is the composite when that composite is a key in the models.dev
 provider-agnostic map, else `""`.
 
-### R10 Environment presence at the boundary
+### R10 Environment and location at the boundary
 
-Every environment read that shapes what the library reports enters at one point.
-`Open` accepts `WithEnvLookup(func(string) (string, bool))`, defaulting to
+Every environment read the library performs for its own account enters at one
+point. `Open` accepts `WithEnvLookup(func(string) (string, bool))`, defaulting to
 `os.LookupEnv`, and it is the source for both of them, so a caller that supplies
-it gets reported data that is a function of its inputs rather than of the host
-process.
+it gets provider-env and path data that is a function of its inputs rather than
+of the host process.
 
-It governs both of the library's data-shaping environment reads:
+It governs both of the library's own data-shaping environment reads:
 
 - Provider env-var presence. `Provider.EnvPresent` and `Agent.ProviderEnv` are
   populated through the lookup, and only presence is taken, never the value.
@@ -671,17 +777,60 @@ Scoping the lookup to provider-env alone would leave every agent's config and
 skills paths resolving against the ambient process environment, which is the input
 a caller most needs to control and the one the Constraints rule names.
 
-One environment read stays on the process environment: resolving the default
-cache directory from `XDG_CACHE_HOME`, with its home fallback, when `WithCacheDir`
-is not supplied. It happens twice — in the catalog loader and again inside
-`modelsdev` — and the `modelsdev` half cannot move, because taking a lookup there
-means changing that package's exported surface, which R16 forbids. Splitting the
-rule so one cache directory honours the lookup and the other does not would be
-worse than either whole answer, so both stay put. This read decides where bytes
-are cached, not what the library reports, so a caller that supplies a lookup still
-gets reported data that is a function of its inputs. `WithCacheDir` is the option
-that controls it, and it is why R18 keeps `t.Setenv` for the cache-directory
-tests.
+The working directory is the second input a resolved path depends on, and it
+enters through its own option. A catalog entry's local config and skills
+directories are relative paths (`.claude`, `.agents/skills`), and the absolute
+values `Detection.Config.Local` and `Detection.Skills.Local` report are those
+paths joined against the working directory. That makes the working directory a
+data-shaping input on the same footing as the environment lookup, not an ambient
+detail: two callers in different directories are told different things about the
+same agent. `Open` therefore accepts `WithWorkingDir(dir string)`, defaulting to
+`os.Getwd`, and local-path resolution takes its base from there. Like path
+expansion, the resolution is already written as a pure function of a captured
+value; this decides where that capture comes from.
+
+Every relative input a `Detection` reports takes that same base, binary paths
+included. `BinaryPath` is made absolute before it is returned, and today that
+absolutisation reads the process working directory directly, which the two
+options a caller steers detection with can both feed a relative value: a
+`WithBinPaths` override and a `WithSearchDirs` location. Left as it is, a caller
+that states a working directory is told a local config path rooted in the
+directory it named and a binary path rooted in the one it did not, in the same
+struct. So the absolutisation takes the captured directory as its base, and
+`Detection.Config.Local`, `Detection.Skills.Local`, and `BinaryPath` all mean the
+same thing by a relative path.
+
+Two environment reads stay on the process environment, and the requirement names
+both rather than claiming a boundary the library does not hold.
+
+The first is the `PATH` search. Locating an agent's binary is `exec.LookPath`
+over the process `PATH`, and it decides `Detection.Found`, `BinaryPath`, and
+whether a version is probed at all — so unlike the cache directory below, it does
+shape what the library reports. It stays on `os/exec` because routing it through
+the lookup means reimplementing that function's executable-bit and directory
+rules in the library, which changes detection semantics the Scope of this project
+preserves unchanged. What stays on the process environment is that search alone,
+not everything binary resolution does with its result: making the located path
+absolute is a join against a base, not a `PATH` semantic, and it takes the
+captured working directory above. A caller steers detection from its inputs
+through the options built for it instead: `WithBinPaths` names an agent's binary
+outright, and `WithSearchDirs` adds locations consulted after `PATH`.
+
+The second is resolving the default cache directory from `XDG_CACHE_HOME`, with
+its home fallback, when `WithCacheDir` is not supplied. It happens twice — in the
+catalog loader and again inside `modelsdev` — and the `modelsdev` half cannot
+move, because taking a lookup there means changing that package's exported
+surface, which R16 forbids. Splitting the rule so one cache directory honours the
+lookup and the other does not would be worse than either whole answer, so both
+stay put. Unlike `PATH`, this read decides only where bytes are cached and shapes
+nothing the library reports. `WithCacheDir` is the option that controls it, and
+it is why R18 keeps `t.Setenv` for the cache-directory tests.
+
+The clock stays on wall time for the same reason, and the surface takes no option
+for it. It is read in one place — the catalog loader's TTL freshness check, which
+already takes an injected `now` internally — and it decides only when a version is
+re-resolved, never a value an operation reports. The TTL behaviour it governs is
+tested where the clock is injectable, in the loader's own package.
 
 ### R11 Options for Open
 
@@ -699,6 +848,7 @@ WithModelsTTL(d time.Duration)           // models.dev cache TTL
 WithSearchDirs(dirs ...string)           // extra binary search locations
 WithBinPaths(m map[string]string)        // per-agent binary path overrides
 WithEnvLookup(fn func(string) (string, bool)) // provider-env presence and path expansion (R10)
+WithWorkingDir(dir string)               // base for local config and skills paths; defaults to os.Getwd (R10)
 WithHTTPClient(hc *http.Client)          // HTTP client for models.dev
 WithLogger(l *slog.Logger)               // structured logger; defaults to a discard handler (R19)
 ```
@@ -728,7 +878,8 @@ the unknown field already; no bespoke handling is added for this one key.
 `WithCatalogDir` is a second catalog source, not a variant of the module path.
 The catalog is loaded by evaluating the CUE module rooted at `dir` — the same
 validate-and-decode step a fetched module goes through, so `schema.cue` travelling
-with the data still does the validating. No version is resolved and no registry is
+with the data still does the validating, and an entry it rejects is
+`ErrCatalogInvalid` (R7). No version is resolved and no registry is
 contacted, so the directory source needs no network on any run, is never stale,
 and makes `WithCatalogTTL` and the catalog half of `WithCacheDir` inert, along
 with the catalog target of `Refresh` (R13). It wins over `WithCatalogModule` when
@@ -755,6 +906,17 @@ query carries a provider set (R8). An `Agents.Get` at `EnrichNone`, and an agent
 operation at `EnrichProviders` over home-provider agents only, resolve entirely
 from the catalog and never contact models.dev.
 
+The not-applicable outcome short-circuits ahead of the level's trigger. An
+`Agents.Get` on an agnostic agent with no provider set is decided as
+`EnrichNotApplicable` from catalog data alone (R8), so it makes no models.dev
+round-trip at any level, `EnrichCount` and `EnrichFull` included. A fetch there
+would report an outage against data the operation has already decided not to
+report: on an unreachable, uncached models.dev the failure would attach a
+`WarnModelsUnreachable` warning beside the `WarnProvidersRequired` guidance, and
+name an omission the agnostic rule had already made. An `Agents.List` is
+unaffected — its fetch is listing-wide and its home-provider rows need it — and
+its agnostic rows stay silent per R8.
+
 This preserves today's behaviour that a pure models.dev operation (a provider
 listing) does not require the agent catalog, that an agent query for offline
 catalog facts does not require models.dev, and that a cold-offline first run
@@ -762,6 +924,20 @@ fails only when an operation actually needs the unresolvable catalog, with
 `ErrCatalogUnavailable`. A catalog supplied by `WithCatalogDir` is read from disk
 on that same first need and reaches no registry, so it never raises
 `ErrCatalogUnavailable` and never reports stale.
+
+Each lazy resolution happens once, under a guard, and the resolved value is
+published to every later reader. This is not a refinement of the single-caller
+case: `Agents.List` fans detection out across catalog entries concurrently, and
+at `EnrichCount` and above each of those goroutines needs the models.dev client,
+so the first list a user runs reaches the unresolved client from many goroutines
+at once. Unguarded, that is a data race, and it costs a duplicated fetch as well:
+`modelsdev.Client` single-flights and memoises within one client, so two
+goroutines that each construct one produce two independent fetches. The library
+holds no shared mutable state today — every `Detect` call is handed a built
+client and a loaded catalog — so this is state the redesign introduces, and the
+guard belongs with it. A resolution that fails is not memoised as a failure: the
+next operation retries, which is what lets a caller recover from a transient
+outage without reopening the `Index`.
 
 ### R13 Refresh
 
@@ -785,6 +961,16 @@ version is not a successful refresh: it is reported as an error, and `Refreshed`
 reflects only the targets that did refresh. A models.dev fetch failure is an
 error; recognisable schema drift wraps `modelsdev.ErrModelsSchema`. On full
 success `Refreshed` reports the targets that refreshed.
+
+`TargetAll` runs its targets in order — catalog, then models.dev — and stops at
+the first failure, returning that target's error with `Refreshed` reporting only
+the targets that completed before it. A target the failure left unattempted is
+neither refreshed nor failed. This is the sequencing the CLI performs today, and
+it is what keeps the single error return single-valued: continuing past a failure
+would refetch models.dev on a run the user is told failed, leave the CLI printing
+a success line under a non-zero exit, and produce a joined error that the R15
+exit-code mapping cannot classify when two targets fail for different reasons —
+one transient, one schema drift.
 
 A refreshed target replaces the `Index`'s own resolved state for that target, so
 the operations a caller makes next serve the refreshed data. This is the point of
@@ -811,19 +997,43 @@ warning naming the directory as the reason — stderr in text mode, the envelope
 `warnings` key under `--json`, like every other warning. That is presentation over
 a fact the library already reports, and it needs no warnings channel on `Refresh`.
 
-The `Index` is safe for concurrent use, so this replacement is the one point where
-that matters: a refresh landing while another goroutine is mid-operation must
-leave that operation on the state it started with, and hand the refreshed state to
-the operations that follow.
+The `Index` is safe for concurrent use. Refresh is the second of the two points
+where that has to be built rather than assumed — the first is the guarded lazy
+resolution of R12. A refresh publishes the replacement catalog, models.dev
+client, and staleness under the same guard those values are resolved behind, so
+an operation already in flight finishes against the state it started with and
+every operation that follows sees the refreshed state. An operation must
+therefore take the state it needs once, at its start, and work from that value
+rather than re-reading the `Index`'s fields as it goes; a refresh landing
+mid-operation cannot then split it across two catalogs.
 
 ### R14 Ordering ownership
 
 The library owns each noun's default order and returns list items already in it:
-agents by id with detected agents leading the undetected tail; models newest
-release first; providers by id. The library does not accept an arbitrary
-sort-by-field request. Re-ordering a projected result by an arbitrary field, and
-reversing it, stays in the CLI, because it operates on the CLI's projected
-presentation record, not on the domain types.
+agents by id; models newest release first; providers by id. The library does not
+accept an arbitrary sort-by-field request. Re-ordering a projected result by an
+arbitrary field, and reversing it, stays in the CLI, because it operates on the
+CLI's projected presentation record, not on the domain types.
+
+That ownership reaches `Agent.Models` too: the model list attached to an agent
+carries the models order, newest release first, wherever it is attached. Agent
+detail already renders it that way, sorting in the CLI; the agents listing does
+not sort it at all and serves it in the models.dev client's id order, which its
+JSON payload exposes. One field with one documented order is the point of R3
+carrying the order in its definition, so the listing's array is reordered. That
+is the fourth exception in Constraints, and the CLI's sort moves into the library
+with it.
+
+The agents listing's default view adds one thing on top of that order: detected
+agents lead and the undetected tail follows. That grouping stays in the CLI, and
+not because ordering is presentation. It is conditional on `--order-by` being
+absent — naming a sort field, `id` included, suppresses it and yields a pure field
+sort — and the library never sees that flag, so it cannot express the condition.
+The grouping is a stable pass over the projected records reading `Detection.Found`,
+applied after the field sort, which is where it lives today. A library that
+returned pre-grouped agents would have that grouping discarded anyway: the CLI's
+sort runs on every invocation, falling back to the field set's default key when
+`--order-by` is absent.
 
 ### R15 CLI as a thin shell
 
@@ -835,9 +1045,11 @@ enrichment degrade classification all move to the library per R5 through R9.
 
 Presentation stays in the CLI: the `record`/`fieldSet` projection, `--fields`
 selection, table and detail rendering, `internal/tui`, the JSON envelope, the
-empty-state and price-footer formatting, arbitrary-field ordering (R14), the
-exit-code taxonomy, and the flag-naming remedy clause the CLI appends to
-`WarnProvidersRequired` (R6).
+empty-state and price-footer formatting, arbitrary-field ordering and the agents
+listing's detected-first grouping (R14), the
+exit-code taxonomy, and the clauses that name the CLI's own flags and
+subcommands: the remedy appended to `WarnProvidersRequired` (R6) and the
+remedies added to the R7 errors.
 
 The models table's provider column follows from that ownership. It is shown when
 the returned rows span more than one distinct provider, decided from the rows the
@@ -886,8 +1098,8 @@ The CLI maps library facts to exit codes as follows:
 | `ErrCatalogUnavailable`, `ErrModelsUnavailable` | 75 transient |
 | `ErrAgentUnknown`, `ErrNotFound` | 3 not-found |
 | `ErrUnknownProvider`, `ErrProvidersRequired`, `ErrProvidersNotAllowed`, `ErrMalformedModelID` | 2 usage |
-| `modelsdev.ErrModelsSchema` | 78 config |
-| `AgentDetail.Coverage.Status` = `CoverageNonePresent` or `CoverageSchemaDrift` | 78 config, agent still reported |
+| `ErrCatalogInvalid`, `modelsdev.ErrModelsSchema` | 78 config |
+| `AgentDetail.Coverage.Status` = `CoverageNonePresent` or `CoverageSchemaDrift` | 78 config, agent still reported; the drift message is `Coverage.Err`, the none-present message is rebuilt from `Coverage.Absent` |
 | `EnrichNotApplicable` on a field the user named explicitly | 2 usage, wrapping `ErrProvidersRequired` |
 | `Refresh` catalog re-resolution failed (stale) | 75 transient |
 | `Refresh` models.dev fetch failed | 75 transient, or 78 on schema drift |
@@ -910,6 +1122,26 @@ including `README.md` and `AGENTS.md` — so they describe only the new surface.
 Remove every description of the removed functions and types. The documents must
 read as though this surface were the original; no document may reference a
 migration from a prior API.
+
+Removal alone leaves nothing behind, because nothing describes the public API
+today: `README.md` documents the CLI and calls the library the primary artefact
+without showing it, and `AGENTS.md` covers module layout and catalog authoring.
+So the surface this project builds must also be written down, in the two places a
+reader looks:
+
+- The root package's doc comment carries the surface itself: `Open` and its
+  options, the three services and their two verbs, the enrichment levels and what
+  each costs, and the warning and error model. This is what a Go consumer reads
+  first, and it is the one description that cannot drift from the code.
+- `README.md` gains a library section beside its CLI section: the same shape in
+  brief, with one worked example running from `Open` through a query to a result,
+  so the repository's front page shows the artefact it already calls primary.
+
+Draft the package doc comment with the types in step 1 rather than leaving it to
+step 10. It is the cheapest test of whether the surface reads as R2 through R13
+claim — a query that needs three fields set to do the obvious thing, or a level
+that cannot be used without a paragraph first, shows up there while the surface
+is still cheap to change and before the CLI is rewritten over it.
 
 `AGENTS.md`'s add-an-agent procedure needs a correction beyond the rename. Its
 "Exercise through the library" step tells a contributor to point the loader at the
@@ -938,14 +1170,25 @@ behaviour tested where it now lives.
   (see the fixture rule below).
 - Every new public operation is tested directly: `Open` and its options, the
   three services' `List` and `Get`, `Refresh`, `CatalogStale`, the R7 error set,
-  the `EnrichmentState` and `ProviderCoverage` outcomes, the warning injection,
-  and lazy resolution including the cold-offline `ErrCatalogUnavailable` path.
+  the `EnrichmentState` and `ProviderCoverage` outcomes, the warning injection on
+  both the success and the error return (R6), and lazy resolution including the
+  cold-offline `ErrCatalogUnavailable` path.
 - `Refresh` is tested through the same `Index`, not just by its return value: an
   operation run before the refresh and the same operation run after it, against a
   source whose content changed in between, must return the old data and then the
   new. A test that only asserts `Refreshed` cannot see the memoised-client trap
   R13 exists to close. Assert too that a failed target leaves the index serving
   what it served before.
+- The `Index`'s concurrent-use guarantee is tested, under the race detector,
+  against one `Index` shared by several goroutines: concurrent operations that
+  each trigger a lazy resolution, and operations running while a `Refresh`
+  replaces the state beneath them, each asserted to return a coherent result
+  rather than merely to complete. The CLI runs one command per process on one
+  goroutine, so the end-to-end oracle cannot reach this, and the race detector
+  reports only races a test actually drives — without this test the guarantee
+  ships unexercised. Assert the once-only property observably too: a single
+  `Agents.List` over a multi-agent catalog, which fans detection out
+  concurrently, fetches models.dev once, counted at the test server.
 - Each `Enrich` level is tested for what it attaches and what it costs, with the
   no-fetch levels proved against a models.dev endpoint that fails the test if it
   is contacted at all (the existing `mustNotFetchModelsServer` double): an
@@ -953,6 +1196,11 @@ behaviour tested where it now lives.
   `EnrichProviders` operation over home-provider agents, must complete without
   contacting models.dev and without a `WarnProvidersRequired` warning, while
   `EnrichProviders` over an agnostic agent with caller ids must validate them.
+  The not-applicable short-circuit is proved against the same double: an
+  `Agents.Get` on an agnostic agent with no provider set, at `EnrichCount` and at
+  `EnrichFull`, must complete without contacting models.dev, carrying
+  `EnrichNotApplicable` and the `WarnProvidersRequired` guidance as its only
+  warning (R12).
   The no-fetch levels must also report `CoverageNotProbed` (R5), so the unprobed
   state is asserted rather than inferred from an empty struct.
 - The CLI's field-selection-to-level mapping (R15) is asserted end to end for
@@ -969,9 +1217,19 @@ behaviour tested where it now lives.
 - Tests follow the repository practice: real CUE validation, real files via
   `t.TempDir()`, table-driven cases, and real behaviour over mocks. Library tests
   isolate the environment through the injected `WithEnvLookup`, which now covers
-  path expansion as well as provider-env (R10), rather than through `t.Setenv`;
+  path expansion as well as provider-env, and their local-path base through
+  `WithWorkingDir` (R10), rather than through `t.Setenv` and `t.Chdir`; a stated
+  base directory also leaves the local-path tests free to run in parallel.
   `t.Setenv` stays where the process environment really is the subject, in the CLI
-  end-to-end harness and the config and cache-directory tests. The models.dev and
+  end-to-end harness, the config and cache-directory tests, and the detection
+  tests that drive `PATH`, which R10 leaves on the process environment. Where a
+  detection test can express its intent through `WithSearchDirs` or
+  `WithBinPaths` instead, it does — a fixture binary in a search dir is a stated
+  input, a mutated `PATH` is ambient state the test then has to reason about. One
+  case asserts the shared base directly: a relative `WithSearchDirs` or
+  `WithBinPaths` value under a stated `WithWorkingDir` resolves `BinaryPath`
+  against that directory, the same one `Detection.Config.Local` resolves against
+  (R10). The models.dev and
   catalog test doubles already in the suite are reused rather than replaced; the
   ones a library test needs and `internal/cli` currently owns privately — the
   models.dev fixture server, `closedModelsServer`, and `mustNotFetchModelsServer` —
@@ -1033,7 +1291,12 @@ tests land with the code they cover.
 - The `--json` failure envelope is asserted only on usage (2) and not-found (3).
   Assert the envelope shape (`status`, `error`, and `data` presence, and the
   `omitempty` behaviour of the `error`/`warnings` keys) on a config (78), a
-  transient (75), and a permission (4) failure as well.
+  transient (75), and a permission (4) failure as well. Assert too that a warning
+  raised before the failure still reaches the envelope: with a stale catalog,
+  `agents get <unknown-id>`, `agents list --provider <unknown-id>`, and
+  `models list --agent <agnostic-id>` each carry the stale-catalog warning
+  alongside their error. Nothing asserts this today, and it is the behaviour the
+  warnings-on-error rule in R6 exists to preserve.
 - Warnings are asserted only by substring today, so a reworded message passes.
   Assert each warning message by full-string equality — stale catalog, both
   models.dev unreachable degrade messages (the listing's and agent detail's, which
@@ -1041,7 +1304,11 @@ tests land with the code they cover.
   the agnostic-needs-provider guidance — so the verbatim wording R6 requires is
   actually enforced.
 - `agents get` on a none-present or schema-drift data fault asserts only exit 78.
-  Assert that the agent payload is still reported on that fault (R5, R15).
+  Assert that the agent payload is still reported on that fault (R5, R15), and
+  assert the error text each fault emits. The drift text is the models.dev decode
+  failure itself, which the new surface carries through `Coverage.Err`; pinning it
+  at step 0 is what proves the diagnostic survived the move rather than being
+  replaced by a status name.
 - The JSON null-versus-`[]` model-count distinction is pinned, but the text-cell
   distinction is not. Assert that an agnostic/not-applicable agent renders the
   `-` cell and a degraded agent renders `0`, for both degrade causes — models.dev
@@ -1059,8 +1326,14 @@ tests land with the code they cover.
   directory — is new behaviour and lands with R13 in step 9, not here.
 - `agents get` some-present asserts the warning but not the surviving data. Assert
   that the present provider's models still populate.
-- The `--provider`-on-home-provider rejection asserts the exit code but not the
-  message. Assert the guidance text.
+- The failures the library is about to own are asserted by exit code alone, so a
+  message that arrives from a new layer with new wording passes. Assert each by
+  full-string equality: the `--provider`-on-home-provider rejection, the
+  agnostic-needs-provider fault on `agents get` and on `models list --agent`, the
+  unknown-agent id, the unknown provider on `providers get`, the malformed model
+  composite, and both composite not-found messages. These are the strings R7
+  splits between the library and the CLI; pinning them here is what proves the
+  split reproduced them.
 - Warnings-to-stderr in text mode is spot-checked on one command. Assert the
   stream discipline across commands: warnings to stderr in text mode and into the
   envelope under `--json`, data to stdout.
@@ -1076,8 +1349,8 @@ tests land with the code they cover.
   listing with `--provider` against an unreachable, uncached models.dev still
   exits 0 with the degrade warning rather than rejecting the ids (R8).
 
-Five of the step-0 assertions are themselves updated later, and only these: the
-four below, which encode the not-installed short-circuit R4 removes, and the
+Four of the step-0 assertions are themselves updated later, and only these: the
+three below, which encode the not-installed short-circuit R4 removes, and the
 provider-column case exception three inverts. They are updated deliberately, and
 they are the only end-to-end assertions this project is permitted to change; every
 other forced change stays a regression signal.
@@ -1089,9 +1362,22 @@ other forced change stays a regression signal.
   `provider_env` and `models` are no longer absent by virtue of the agent being
   absent. Assert them against the same rules an installed agnostic agent follows —
   omitted without `--provider`, filled with it.
-- Add the case none of them covers: an uninstalled agent whose catalog provider is
-  missing from models.dev reports the same coverage data fault (exit 78, agent
-  still reported) as an installed one.
+
+Exception one needs one case none of those three covers, and it is a new
+assertion rather than an updated one: an uninstalled agent whose catalog provider
+is missing from models.dev reports the same coverage data fault — exit 78 with the
+agent still reported — as an installed one. There is nothing to write it against
+at step 0, where the not-installed short-circuit means no coverage is probed and
+the command exits 0, so it lands with R4 in step 9 alongside the other assertions
+that describe behaviour this project creates.
+
+Exception four is not on that list because nothing asserts it today: the agents
+listing's model array is checked for its length alone, so the order it carries is
+unpinned in both directions. Pinning today's id order at step 0 would only buy a
+fifth assertion to rewrite. Assert the new order instead, with R14 in step 9 — an
+`agents list --json` over an agent with several models, and the same agent through
+`agents get --models`, both newest release first — so the one order the library
+owns is proved to reach both surfaces.
 
 ### R19 Observability
 
@@ -1124,19 +1410,23 @@ logic leaves the CLI.
   `cuelang.org/go` and `cobra`/`pflag`, and the existing `modelsdev` package.
 - Preserve the boundary discipline: the library reports only the outside of an
   agent (identity, location, paths, version, capability) and never reads an
-  agent's internal configuration. Nondeterministic inputs — clock, filesystem,
-  network, environment — enter only through `Open` options and context.
+  agent's internal configuration. Every nondeterministic input that shapes a
+  reported value — the environment, the working directory, the filesystem, the
+  network — enters through `Open` options and context, save for the process reads
+  R10 names and defends: the `PATH` search that locates an agent's binary, the
+  default cache directory, and the clock.
 - No compatibility layer. The removed API leaves no alias, shim, or forwarding
   wrapper.
 - The CLI's observable behaviour is a fixed contract: command tree, flags, JSON
-  envelope shape and keys, exit codes, warning wording, ordering defaults,
+  envelope shape and keys, exit codes, warning and error message wording,
+  ordering defaults,
   `--fields` keys and defaults per Current State, filter empty-state messages,
-  and price-footer rendering are unchanged by this project. Three exceptions are
+  and price-footer rendering are unchanged by this project. Four exceptions are
   named, and no other end-to-end assertion may change.
 - Exception one: agent detail on a not-installed agent, which now enriches like any
   other agent (R4): its payload gains `provider_env` and `models`, its warning
-  loses the omission suffix (R6), and its coverage verdict is reported. The four
-  assertions this changes are listed in R18.
+  loses the omission suffix (R6), and its coverage verdict is reported. The three
+  assertions this changes, and the one it adds, are listed in R18.
 - Exception two: the `disabled_agents` config key is removed (R11), so a
   `config.cue` that sets it now fails to load as a config fault instead of hiding
   the named agents from `agents list`. The config schema is the only surface this
@@ -1148,6 +1438,11 @@ logic leaves the CLI.
   models.dev does not carry — the column is now absent instead of repeating a
   single value. The JSON payload is unaffected: `provider` is a field of every
   model record at every scope.
+- Exception four: the model array attached to each agent in `agents list --json`
+  is ordered newest release first rather than by model id (R14). Agent detail
+  already emits that order, so the change makes the two agent surfaces agree; the
+  array's membership and every model record within it are unaffected, and the
+  text listing renders the array's length, which does not move.
 - Agent ids stay kebab-case; the catalog map key remains the single source of
   agent identity.
 - Commit messages follow Scoped Commits.
@@ -1165,21 +1460,25 @@ logic leaves the CLI.
    `EnrichmentState`, `ProviderCoverage`/`CoverageStatus`, `Warning`/`WarningKind`,
    `Target`/`Refreshed`, and the R7 error set. Carry the slimmed `KnownAgent` and
    `ResolvedPaths` forward per R3; make the catalog `PathPair` and `VersionProbe`
-   types unexported.
+   types unexported. Draft the package doc comment against these types as they
+   land (R17), so the surface is read as prose before anything is built on it.
 
-2. Implement `Open` and lazy wiring (R11, R12, R19): construct the `Index` over the
+2. Implement `Open` and lazy wiring (R10, R11, R12, R19): construct the `Index` over the
    existing catalog loader and a `modelsdev.Client`, resolving the catalog and
-   fetching models.dev on first need. Accept `WithLogger` with a discard default
+   fetching models.dev once on first need, behind the guard the concurrent
+   detection fan-out requires (R12). Accept `WithLogger` with a discard default
    and thread the logger to the decision points. Add the catalog directory source
    and its `catalog.dir` config key, and remove `disabled_agents` and its mapping.
    Move the `internal/config` option mapping so that `config.Config` produces
    `[]agentdex.Option` for `Open`; the config package keeps ownership of
    `config.cue` loading.
 
-3. Implement `AgentService` (R3, R4, R5, R8): detection plus enrichment, the
+3. Implement `AgentService` (R3, R4, R5, R8, R10): detection plus enrichment, the
    enrichment-state encoding, the provider coverage rollup as data, the
-   not-installed fact, and the agnostic/home rules. Lift the rollup and degrade
-   policy out of `internal/cli/agents.go` into the library.
+   not-installed fact, and the agnostic/home rules, with path resolution taking
+   its environment and local-path base from the injected lookup and working
+   directory. Lift the rollup and degrade policy out of `internal/cli/agents.go`
+   into the library.
 
 4. Implement `ProviderService` (R3, R10): list and exact get over models.dev with
    env presence read through the injected lookup.
@@ -1209,7 +1508,9 @@ logic leaves the CLI.
    operation. Keep the CLI end-to-end tests that drive `NewRootCommand` with
    captured output as the parity oracle for observable behaviour.
 
-10. Update the documentation (R17).
+10. Update the documentation (R17): the `README.md` library section, the
+    `AGENTS.md` add-an-agent correction, and a final pass over the package doc
+    comment drafted in step 1.
 
 11. Run the finalisation sweep.
 
@@ -1258,11 +1559,14 @@ on 1 and 2. Steps 7 and 8 depend on 3 through 6. Step 9 runs alongside 3 through
 5. A stale catalog surfaces as a `WarnStaleCatalog` warning on the returns of the
    operations that resolve the agent catalog — the `Result` from `Agents.List` and
    `Models.List` scoped by agent, and `Agents.Get`'s `AgentDetail.Warnings` — and
-   `Index.CatalogStale(ctx)` reports true.
+   `Index.CatalogStale(ctx)` reports true. It surfaces on those operations' error
+   returns too, so an unknown agent id under a stale catalog still carries the
+   warning into the CLI's failure envelope.
 6. An agnostic agent without a provider set is `EnrichmentState ==
    EnrichNotApplicable` with a `WarnProvidersRequired` warning at
    `EnrichProviders` and above, and never fails `Agents.Get`; at `EnrichNone` it
-   is `EnrichNotRequested`, silent, and contacts no models.dev; a `Models.List`
+   is `EnrichNotRequested` and silent; `Agents.Get` contacts no models.dev for it
+   at any level, `EnrichCount` and `EnrichFull` included; a `Models.List`
    scoped to it is `ErrProvidersRequired`; a models.dev outage on a count
    enrichment carries `EnrichmentState == EnrichDegraded` and does not fail the
    operation.
@@ -1281,19 +1585,27 @@ on 1 and 2. Steps 7 and 8 depend on 3 through 6. Step 9 runs alongside 3 through
     with no registry contact, so an agent added to a working-tree `catalog/` is
     visible to `agents list` and `agents get` — through the `catalog.dir` config
     key — before any version is published, and an entry the published schema would
-    reject fails there. With that key set, `agentdex refresh` exits 0 having
+    reject fails there with `ErrCatalogInvalid` at exit 78, carrying the CUE
+    diagnostic that names the offending entry and field. With that key set, `agentdex refresh` exits 0 having
     refreshed models.dev alone, naming the directory source rather than claiming a
     catalog refresh or failing as transient.
 11. Agent disabling is gone end to end: `go doc` shows no `WithDisabled`, `#Config`
     rejects `disabled_agents`, `config.Config` has no `Disabled` field, and the
     detection walk has no id-skip branch.
-12. The CLI's observable behaviour is unchanged apart from the three exceptions
+12. The CLI's observable behaviour is unchanged apart from the four exceptions
     named in Constraints: JSON envelope shape and keys, the exit codes
-    in the R15 table, warning wording, ordering defaults, `--fields` keys and
+    in the R15 table, warning and error message wording per R6 and R7, ordering
+    defaults, `--fields` keys and
     defaults per Current State, and filter empty-state messages match the
     pre-project behaviour, as demonstrated by the retained CLI end-to-end tests.
-13. Every API-describing document, including `README.md` and `AGENTS.md`, describes
-    only the new surface, with no reference to the removed API.
+13. The new surface is documented where both a Go consumer and a repository
+    reader find it: the root package's doc comment describes `Open` and its
+    options, the three services and their two verbs, the enrichment levels, and
+    the warning and error model; `README.md` carries a library section with a
+    worked example from `Open` to a result; and `AGENTS.md`'s add-an-agent
+    procedure exercises the catalog through the directory source rather than the
+    `catalog.module` override. No document references the removed API or reads as
+    a migration from it.
 14. The behaviour relocated from the CLI into the library has direct library-level
     tests; the root-package tests that exercised the removed API are rewritten
     against the new surface, supplying their catalogs through the module-materialising
@@ -1303,7 +1615,12 @@ on 1 and 2. Steps 7 and 8 depend on 3 through 6. Step 9 runs alongside 3 through
     injection, and the cold-offline `ErrCatalogUnavailable` path are tested
     directly; the CLI oracle gaps named in R18 were closed at step 0, in a commit
     that passes against the pre-project code; and the CLI end-to-end tests pass
-    unchanged except for the five assertions R18 names as deliberately updated.
-15. The finalisation sweep passes: `gofmt -l .` clean, `go build ./...` and
+    unchanged except for the four assertions R18 names as deliberately updated.
+15. One `Index` serves concurrent operations correctly: lazy catalog and
+    models.dev resolution happen once under a guard however many goroutines
+    arrive at them, a `Refresh` landing mid-operation leaves that operation on
+    the state it started with and serves the refreshed state to the next one, and
+    the whole of it holds under `go test -race`.
+16. The finalisation sweep passes: `gofmt -l .` clean, `go build ./...` and
     `go vet ./...` pass, `golangci-lint run` clean, `go test ./...` passes, and
     from `catalog/` `cue vet ./...` passes with `cue mod tidy` clean.
