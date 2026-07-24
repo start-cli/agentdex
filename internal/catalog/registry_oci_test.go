@@ -4,14 +4,8 @@ import (
 	"context"
 	"errors"
 	"os"
-	"path"
 	"path/filepath"
-	"sync"
 	"testing"
-	"testing/fstest"
-
-	"cuelang.org/go/mod/modcache"
-	"cuelang.org/go/mod/modregistrytest"
 
 	"github.com/start-cli/agentdex/internal/catalog"
 	"github.com/start-cli/agentdex/internal/catalogtest"
@@ -27,10 +21,7 @@ import (
 // from CUE's content cache with no network, while a first run with no resolved
 // version fails with ErrUnavailable.
 func TestProductionRegistryAgainstLocalOCI(t *testing.T) {
-	reg, closeServer := startLocalRegistry(t)
-
-	t.Setenv("CUE_REGISTRY", reg.Host()+"+insecure")
-	t.Setenv("CUE_CACHE_DIR", cueCacheDir(t))
+	_, closeServer := catalogtest.StartRegistry(t)
 
 	prod, err := catalog.NewRegistry()
 	if err != nil {
@@ -108,46 +99,4 @@ func assertFixtureAgents(t *testing.T, cat *catalog.Catalog) {
 			t.Errorf("agent %q has ID %q after a real fetch; ID must equal its map key", id, a.ID)
 		}
 	}
-}
-
-// startLocalRegistry publishes the catalog-valid fixture to an in-process OCI
-// registry and returns it with a once-guarded close so the test can take it
-// offline mid-run without a double-close at cleanup. modregistrytest expects
-// each module under a directory named path_version, with slashes in the
-// (major-stripped) module path replaced by underscores.
-func startLocalRegistry(t *testing.T) (*modregistrytest.Registry, func()) {
-	t.Helper()
-	dir := catalogtest.FixtureDir(t, "catalog-valid")
-	const moduleDir = "github.com_start-cli_agentdex_catalog_v1.0.0"
-
-	fsys := fstest.MapFS{}
-	for _, rel := range []string{"cue.mod/module.cue", "schema.cue", "agents.cue"} {
-		data, err := os.ReadFile(filepath.Join(dir, rel))
-		if err != nil {
-			t.Fatalf("read fixture %s: %v", rel, err)
-		}
-		fsys[path.Join(moduleDir, rel)] = &fstest.MapFile{Data: data}
-	}
-
-	reg, err := modregistrytest.New(fsys, "")
-	if err != nil {
-		t.Fatalf("start local registry: %v", err)
-	}
-	var once sync.Once
-	closeServer := func() { once.Do(reg.Close) }
-	t.Cleanup(closeServer)
-	return reg, closeServer
-}
-
-// cueCacheDir returns a fresh CUE content-cache directory. CUE writes extracted
-// modules read-only, so t.TempDir's RemoveAll cannot unlink them; modcache.RemoveAll
-// handles the read-only tree.
-func cueCacheDir(t *testing.T) string {
-	t.Helper()
-	dir, err := os.MkdirTemp("", "agentdex-cue-cache")
-	if err != nil {
-		t.Fatalf("create cue cache dir: %v", err)
-	}
-	t.Cleanup(func() { _ = modcache.RemoveAll(dir) })
-	return dir
 }

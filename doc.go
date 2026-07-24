@@ -9,9 +9,10 @@
 // Open constructs an *Index, the entry point and facade. It performs no network
 // I/O; the agent catalog and the models.dev catalog are resolved lazily on the
 // first operation that needs each, once, behind a guard, and the Index is safe for
-// concurrent use. Options configure the catalog source, the caches, detection, and
-// the boundary inputs (environment lookup and working directory); WithLogger opts
-// the library into structured debug logging.
+// concurrent use. Options configure the catalog source (WithCatalogModule, or
+// WithCatalogDir to evaluate a local working-tree module with no registry
+// contact), the caches, detection, and the boundary inputs (environment lookup and
+// working directory); WithLogger opts the library into structured debug logging.
 //
 //	idx, err := agentdex.Open(ctx)
 //	if err != nil { return err }

@@ -125,7 +125,7 @@ func (c *core) resolveCatalog(ctx context.Context) (*catalog.Catalog, bool, erro
 	if c.cat != nil {
 		return c.cat, c.catStale, nil
 	}
-	cat, stale, err := c.loadCatalog(ctx)
+	cat, stale, err := c.loadCatalog(ctx, false)
 	if err != nil {
 		return nil, false, err
 	}
@@ -139,7 +139,7 @@ func (c *core) resolveCatalog(ctx context.Context) (*catalog.Catalog, bool, erro
 // so it is never stale; otherwise the registry loader resolves a version and may
 // report the last resolved version as stale. Loader faults are mapped to the
 // public sentinels (R7).
-func (c *core) loadCatalog(ctx context.Context) (*catalog.Catalog, bool, error) {
+func (c *core) loadCatalog(ctx context.Context, force bool) (*catalog.Catalog, bool, error) {
 	if c.catalogDir != "" {
 		cat, err := catalog.LoadDir(c.catalogDir)
 		if err != nil {
@@ -158,7 +158,12 @@ func (c *core) loadCatalog(ctx context.Context) (*catalog.Catalog, bool, error) 
 	if c.catalogModule != "" {
 		lopts = append(lopts, catalog.WithModulePath(c.catalogModule))
 	}
-	if c.catalogTTLSet {
+	switch {
+	case force:
+		// A zero TTL treats any cached resolution as expired, forcing re-resolution
+		// past it (R13).
+		lopts = append(lopts, catalog.WithTTL(0))
+	case c.catalogTTLSet:
 		lopts = append(lopts, catalog.WithTTL(c.catalogTTL))
 	}
 	if c.cacheDir != "" {
@@ -241,4 +246,52 @@ func (c *core) newModelsClient(extra ...modelsdev.ClientOption) *modelsdev.Clien
 	}
 	opts = append(opts, extra...)
 	return modelsdev.New(opts...)
+}
+
+// refreshCatalog forces re-resolution of the registry catalog past the cache and
+// publishes the fresh result under the guard, so the operations a caller makes next
+// serve it (R13). A directory source has no version to re-resolve and is always
+// current, so it reports not-refreshed with no error, leaving the models.dev half of
+// a TargetAll refresh to run. A re-resolution that fails and falls back to the last
+// resolved version is not a refresh: it is reported as ErrCatalogUnavailable and the
+// installed state is left untouched.
+func (c *core) refreshCatalog(ctx context.Context) (bool, error) {
+	if c.catalogDir != "" {
+		c.logger.LogAttrs(ctx, slog.LevelDebug, "catalog refresh skipped",
+			slog.String("reason", "directory source is always current"), slog.String("dir", c.catalogDir))
+		return false, nil
+	}
+	cat, stale, err := c.loadCatalog(ctx, true)
+	if err != nil {
+		return false, err
+	}
+	if stale {
+		return false, errf(ErrCatalogUnavailable,
+			"agentdex catalog refresh failed: could not re-resolve the latest version, the cached version is unchanged")
+	}
+	c.catMu.Lock()
+	c.cat, c.catStale = cat, false
+	c.catMu.Unlock()
+	c.logger.LogAttrs(ctx, slog.LevelDebug, "catalog refreshed")
+	return true, nil
+}
+
+// refreshModels refetches the models.dev catalog past its cache through a
+// force-refresh client and installs that client in place of the old one, so the
+// operations a caller makes next serve the refetched data (R13). The existing client
+// memoises its merged catalog for its lifetime, so a refetch through a throwaway
+// client would leave the Index serving the pre-refresh answers; swapping the fresh
+// client in is what makes the refresh visible. A fetch failure is an error — schema
+// drift wrapping modelsdev.ErrModelsSchema, any other fault ErrModelsUnavailable —
+// and the existing client is left in place.
+func (c *core) refreshModels(ctx context.Context) error {
+	fresh := c.newModelsClient(modelsdev.WithForceRefresh())
+	if _, err := fresh.Catalog(ctx); err != nil {
+		return mapModelsErr(err)
+	}
+	c.mdMu.Lock()
+	c.md = fresh
+	c.mdMu.Unlock()
+	c.logger.LogAttrs(ctx, slog.LevelDebug, "models.dev refreshed")
+	return nil
 }

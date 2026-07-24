@@ -13,6 +13,63 @@ The repository hosts two independent module systems:
 
 They do not interfere: the Go build ignores `catalog/`, and the CUE module is versioned and published independently of the Go binary.
 
+## Library
+
+The library is the primary artefact; the CLI is a thin shell over it. `Open` returns an `*Index`, the entry point and facade, exposing the three data nouns as services:
+
+```go
+type Index struct {
+	Agents    AgentService
+	Providers ProviderService
+	Models    ModelService
+}
+```
+
+Each service has exactly two operations: a browse `List`, returning a `Result[T]` of items and warnings, and an exact `Get`. Detection is a property of an agent, reported on `Agent.Detection`, not a top-level verb. The `Index` also carries the cache-level operations `Refresh` and `CatalogStale`.
+
+`Open` performs no network I/O. The agent catalog and the models.dev catalog are resolved lazily on the first operation that needs each, once, behind a guard, so the `Index` is safe for concurrent use. Options configure the catalog source (`WithCatalogModule`, `WithCatalogDir`, `WithCatalogTTL`), the caches (`WithCacheDir`, `WithModelsURL`, `WithModelsTTL`), detection (`WithSearchDirs`, `WithBinPaths`), the boundary inputs (`WithEnvLookup`, `WithWorkingDir`, `WithHTTPClient`), and structured debug logging (`WithLogger`, silent by default).
+
+An agent operation takes an `Enrich` level, the single demand axis, each level a superset of the one below: `EnrichNone` (catalog and detection facts only, silent and offline), `EnrichProviders` (adds the resolved provider set), `EnrichCount` (adds provider-env presence, a model count, and coverage on `Agents.Get`), and `EnrichFull` (adds the full models list). Installation status gates none of it, so a caller can ask what an agent offers before installing it. Each returned `Agent` records the outcome in `EnrichmentState` — applied, not-requested, not-applicable (an agnostic agent with no providers), or degraded (models.dev could not fill it).
+
+Warnings are structured: each carries a `Kind` a caller can branch on and a `Msg` it emits verbatim, and they ride on both the success and the error return. Errors are sentinels matched with `errors.Is` — `ErrCatalogUnavailable`, `ErrCatalogInvalid`, `ErrModelsUnavailable`, `ErrAgentUnknown`, `ErrUnknownProvider`, `ErrProvidersRequired`, `ErrProvidersNotAllowed`, `ErrMalformedModelID`, and `ErrNotFound` — with recognisable models.dev schema drift wrapping `modelsdev.ErrModelsSchema` wherever it surfaces.
+
+A worked example, from `Open` through a query to a result:
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+	"os"
+
+	"github.com/start-cli/agentdex"
+)
+
+func main() {
+	ctx := context.Background()
+
+	idx, err := agentdex.Open(ctx)
+	if err != nil {
+		log.Fatal(err)
+	}
+
+	res, err := idx.Agents.List(ctx, agentdex.AgentQuery{Enrich: agentdex.EnrichCount})
+	if err != nil {
+		log.Fatal(err)
+	}
+	for _, w := range res.Warnings {
+		fmt.Fprintln(os.Stderr, "warning:", w.Msg)
+	}
+	for _, a := range res.Items {
+		fmt.Printf("%-14s installed=%t models=%d\n", a.ID, a.Detection.Found, a.ModelCount)
+	}
+}
+```
+
+The full surface — every option, service method, query and result type, enrichment level, and error — is documented on the [package](https://pkg.go.dev/github.com/start-cli/agentdex).
+
 ## CLI
 
 agentdex ships a thin command-line interface over the library.

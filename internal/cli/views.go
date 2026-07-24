@@ -41,26 +41,27 @@ func agentRecordWithoutProviders(a *agentdex.Agent) *record {
 }
 
 func buildAgentRecord(a *agentdex.Agent, includeProviders bool) *record {
+	d := a.Detection
 	r := newRecord(agentFieldSet)
 	r.add("id", a.ID, a.ID)
 	r.add("name", a.Name, a.Name)
-	r.add("version", a.Version, orDash(a.Version))
+	r.add("version", d.Version, orDash(d.Version))
 	// A not-found agent renders "missing" in the bin cell (the list detection
 	// signal); the JSON value stays blank with found carrying the fact.
-	binText := orDash(a.BinaryPath)
-	if !a.Found {
+	binText := orDash(d.BinaryPath)
+	if !d.Found {
 		binText = "missing"
 	}
-	r.add("bin", a.BinaryPath, binText)
-	r.add("found", a.Found, fmt.Sprintf("%t", a.Found))
-	r.add("config_dir", a.Config.Global, orDash(a.Config.Global))
+	r.add("bin", d.BinaryPath, binText)
+	r.add("found", d.Found, fmt.Sprintf("%t", d.Found))
+	r.add("config_dir", d.Config.Global, orDash(d.Config.Global))
 	// config_local_dir and skills_dir are added here, in their declared position, so the add
 	// order matches agentFieldSet.all and the text detail view renders in that order.
-	if a.Config.Local != "" {
-		r.add("config_local_dir", a.Config.Local, a.Config.Local)
+	if d.Config.Local != "" {
+		r.add("config_local_dir", d.Config.Local, d.Config.Local)
 	}
-	if a.Skills.Global != "" {
-		r.add("skills_dir", a.Skills.Global, a.Skills.Global)
+	if d.Skills.Global != "" {
+		r.add("skills_dir", d.Skills.Global, d.Skills.Global)
 	}
 	if includeProviders {
 		r.add("providers", a.Providers, strings.Join(a.Providers, ", "))
@@ -139,10 +140,10 @@ var providerFieldSet = newFieldSet(
 ).ordered("id")
 
 // providerRecord builds the field values for one provider. present maps each of the
-// provider's API-key variable names to whether it is set in the environment; it is
-// computed at the boundary (envPresence) and passed in, so the record builder is
-// testable from inputs. env carries the sorted names for JSON and the presence-folded
-// cell for text; present carries the map itself.
+// provider's API-key variable names to whether it is set in the environment; the
+// library resolves it at the boundary and passes it in (as Provider.EnvPresent), so
+// the record builder is testable from inputs. env carries the sorted names for JSON
+// and the presence-folded cell for text; present carries the map itself.
 func providerRecord(p modelsdev.Provider, present map[string]bool) *record {
 	r := newRecord(providerFieldSet)
 	r.add("id", p.ID, p.ID)

@@ -7,34 +7,10 @@ import (
 	"github.com/start-cli/agentdex/modelsdev"
 )
 
-// fakeLookup builds an os.LookupEnv-shaped function from a set of "present" names,
-// so env-presence is driven from inputs without t.Setenv.
-func fakeLookup(set ...string) func(string) (string, bool) {
-	present := make(map[string]bool, len(set))
-	for _, name := range set {
-		present[name] = true
-	}
-	return func(name string) (string, bool) {
-		if present[name] {
-			return "value", true
-		}
-		return "", false
-	}
-}
-
-func TestEnvPresenceReadsPresenceOnly(t *testing.T) {
-	got := envPresence([]string{"FOO_KEY", "BAR_KEY"}, fakeLookup("FOO_KEY"))
-	if !got["FOO_KEY"] {
-		t.Errorf("FOO_KEY presence = false, want true")
-	}
-	if got["BAR_KEY"] {
-		t.Errorf("BAR_KEY presence = true, want false")
-	}
-}
-
 func TestProviderRecordEnvAndPresence(t *testing.T) {
 	// A set variable gains the (set) suffix in the env cell and an unset one stays
-	// bare; the structured present map carries the booleans without the suffix.
+	// bare; the structured present map carries the booleans without the suffix. The
+	// presence map is the library's Provider.EnvPresent, supplied here directly.
 	p := modelsdev.Provider{
 		ID:   "acme",
 		Name: "Acme",
@@ -44,7 +20,7 @@ func TestProviderRecordEnvAndPresence(t *testing.T) {
 			"m2": {ID: "m2"},
 		},
 	}
-	present := envPresence(p.Env, fakeLookup("FOO_KEY"))
+	present := map[string]bool{"FOO_KEY": true, "BAR_KEY": false}
 	fs, err := providerRecord(p, present).resolve(nil)
 	if err != nil {
 		t.Fatalf("resolve: %v", err)
@@ -76,7 +52,7 @@ func TestProviderRecordEnvAndPresence(t *testing.T) {
 
 func TestProviderRecordNoEnvBlankCell(t *testing.T) {
 	p := modelsdev.Provider{ID: "acme", Name: "Acme"}
-	fs, _ := providerRecord(p, envPresence(p.Env, fakeLookup())).resolve(nil)
+	fs, _ := providerRecord(p, nil).resolve(nil)
 	for _, f := range fs {
 		if f.key == "env" && f.text != "" {
 			t.Errorf("env cell for a provider with no declared var = %q, want blank", f.text)

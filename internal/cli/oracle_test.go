@@ -287,6 +287,27 @@ func TestOracleGetDataFaultReportsAgentAndError(t *testing.T) {
 			t.Errorf("data = %v, want the alpha-cli agent payload", env.Data)
 		}
 	})
+
+	t.Run("none present not installed", func(t *testing.T) {
+		// Coverage is computed identically whether or not the binary is installed (R4,
+		// exception one): an uninstalled agent whose catalog provider is missing from
+		// models.dev reports the same data fault — exit 78 with the agent still reported —
+		// as an installed one. alpha-cli (anthropic) is left uninstalled here.
+		srv := modelsServer(t, []string{"google"})
+		newScenario(t, srv.URL) // alpha-cli not installed
+		got := runCLI("--json", "agents", "get", "alpha-cli")
+		if got.code != codeConfig {
+			t.Fatalf("exit = %d, want 78; stderr=%q", got.code, got.stderr)
+		}
+		env := got.envelope(t)
+		if env.Error != `catalog data error: no provider of "alpha-cli" is present in models.dev (providers: anthropic)` {
+			t.Errorf("error = %q", env.Error)
+		}
+		data, ok := env.Data.(map[string]any)
+		if !ok || data["id"] != "alpha-cli" || data["found"] != false {
+			t.Errorf("data = %v, want the uninstalled alpha-cli payload with found=false", env.Data)
+		}
+	})
 }
 
 // modelsCell returns the trailing MODELS-column cell for the row whose first
@@ -541,11 +562,12 @@ func TestOracleErrorMessagesVerbatim(t *testing.T) {
 	}
 }
 
-func TestOracleModelsProviderColumnScopeBased(t *testing.T) {
-	// The models table's provider column is not asserted at all. Pin the scope-based
-	// rule the CLI applies today: shown for a multi-provider scope, absent for a
-	// single-provider one, including the case a filter narrows a multi-provider scope
-	// to one provider's rows (the case R15 later inverts to the row-based rule).
+func TestOracleModelsProviderColumnRowBased(t *testing.T) {
+	// The models table's provider column follows the returned rows (R15): shown when
+	// the rows span more than one distinct provider, absent otherwise. The first two
+	// cases agree with the old scope-based rule; the third is the one exception three
+	// inverts — a filter narrowing a multi-provider scope to one provider's rows now
+	// hides the column instead of repeating a single value.
 	t.Run("multi-provider scope shows column", func(t *testing.T) {
 		srv := modelsServer(t, []string{"google", "openai"})
 		newScenario(t, srv.URL)
@@ -570,19 +592,22 @@ func TestOracleModelsProviderColumnScopeBased(t *testing.T) {
 		}
 	})
 
-	t.Run("filter narrowing multi scope keeps column", func(t *testing.T) {
+	t.Run("filter narrowing to one provider hides column", func(t *testing.T) {
 		srv := modelsServer(t, []string{"anthropic", "google"})
 		newScenario(t, srv.URL)
 		got := runCLI("models", "list", "claude", "--provider", "anthropic,google")
 		if got.code != codeOK {
 			t.Fatalf("exit = %d, stderr=%q", got.code, got.stderr)
 		}
-		if !strings.Contains(got.stdout, "PROVIDER") {
-			t.Errorf("filter-narrowed multi-provider scope should still show the PROVIDER column (scope-based rule):\n%s", got.stdout)
-		}
 		rows := runCLI("--json", "models", "list", "claude", "--provider", "anthropic,google").envelope(t).Data.([]any)
 		if len(rows) != 1 {
-			t.Errorf("filter should narrow to one provider's row, got %d", len(rows))
+			t.Fatalf("filter should narrow to one provider's row, got %d", len(rows))
+		}
+		// Row-based rule (R15 exception three): the returned rows span one provider, so
+		// the column that would repeat a single value is dropped. The JSON payload is
+		// unaffected — provider stays a field of every model record.
+		if strings.Contains(got.stdout, "PROVIDER") {
+			t.Errorf("filter-narrowed single-provider rows should hide the PROVIDER column (row-based rule):\n%s", got.stdout)
 		}
 	})
 }
@@ -653,4 +678,68 @@ func TestOracleStreamDiscipline(t *testing.T) {
 		newScenario(t, closedModelsServer(t), "alpha-cli")
 		assert(t, []string{"agents", "list"}, "unreachable")
 	})
+}
+
+// modelIDsFromJSON extracts the "id" of each element of a JSON model array in order,
+// so a test can assert the order the array carries.
+func modelIDsFromJSON(t *testing.T, v any) []string {
+	t.Helper()
+	arr, ok := v.([]any)
+	if !ok {
+		t.Fatalf("models field is not a JSON array: %#v", v)
+	}
+	ids := make([]string, len(arr))
+	for i, e := range arr {
+		ids[i], _ = e.(map[string]any)["id"].(string)
+	}
+	return ids
+}
+
+func TestOracleAgentModelsNewestFirst(t *testing.T) {
+	// The library owns the one newest-release-first order for an agent's model array,
+	// and it reaches both agent surfaces (R14, exception four). gamma-agent spans
+	// google (2024-01-01) and openai (2025-01-01), so newest-first puts openai's model
+	// ahead of google's even though google sorts first by id.
+	srv := modelsServer(t, []string{"google", "openai"})
+	newScenario(t, srv.URL, "gamma-agent")
+	want := []string{"openai-model", "google-model"}
+
+	list := runCLI("--json", "agents", "list", "--installed")
+	if list.code != codeOK {
+		t.Fatalf("list exit = %d, stderr=%q", list.code, list.stderr)
+	}
+	var gamma map[string]any
+	for _, r := range list.envelope(t).Data.([]any) {
+		if row := r.(map[string]any); row["id"] == "gamma-agent" {
+			gamma = row
+		}
+	}
+	if gamma == nil {
+		t.Fatalf("gamma-agent absent from listing: %v", list.envelope(t).Data)
+	}
+	if got := modelIDsFromJSON(t, gamma["models"]); !hasExactOrder(got, want) {
+		t.Errorf("agents list --json model order = %v, want newest-first %v", got, want)
+	}
+
+	get := runCLI("--json", "agents", "get", "gamma-agent", "--models")
+	if get.code != codeOK {
+		t.Fatalf("get exit = %d, stderr=%q", get.code, get.stderr)
+	}
+	data := get.envelope(t).Data.(map[string]any)
+	if got := modelIDsFromJSON(t, data["models"]); !hasExactOrder(got, want) {
+		t.Errorf("agents get --models model order = %v, want newest-first %v", got, want)
+	}
+}
+
+// hasExactOrder reports whether got equals want element-for-element.
+func hasExactOrder(got, want []string) bool {
+	if len(got) != len(want) {
+		return false
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			return false
+		}
+	}
+	return true
 }
