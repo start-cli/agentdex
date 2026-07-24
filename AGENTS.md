@@ -122,11 +122,22 @@ module clean.
 
 ### 4. Exercise through the library
 
-Point the loader at the local module with the `catalog.module` override rather
-than the registry, then confirm the new entry before publishing. `agents list`
-shows the whole catalog, so the added agent appears with its detection status
-even before it is installed; `--installed` narrows to the agents present on this
-machine:
+Point the loader at the working-tree catalog with the `catalog.dir` key in
+`config.cue`, rather than the registry. `catalog.dir` loads the catalog by
+evaluating the local CUE module directory: no version is resolved and no registry
+is contacted, so the unpublished working tree is visible immediately, and an entry
+the schema rejects fails here with the CUE diagnostic naming it. A module path
+cannot name an unpublished tree, so this is the only source that shows a working
+edit before it is published. Set the key to the repository's `catalog/`
+directory:
+
+```cue
+catalog: dir: "/path/to/agentdex/catalog"
+```
+
+Then confirm the new entry before publishing. `agents list` shows the whole
+catalog, so the added agent appears with its detection status even before it is
+installed; `--installed` narrows to the agents present on this machine:
 
 ```bash
 agentdex agents list

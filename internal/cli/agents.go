@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -11,9 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/start-cli/agentdex"
-	"github.com/start-cli/agentdex/internal/config"
 	"github.com/start-cli/agentdex/internal/tui"
-	"github.com/start-cli/agentdex/modelsdev"
 )
 
 // newAgentsCmd is the agents noun group: a browse verb (list) and an exact fetch
@@ -58,89 +55,40 @@ func (a *app) newAgentsListCmd() *cobra.Command {
 			"and exits 0.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := a.requireConfig()
+			idx, err := a.index(cmd)
 			if err != nil {
-				return a.failConfig(cmd, err)
-			}
-			flags, err := a.mapFlags()
-			if err != nil {
-				return a.usage(cmd, err)
+				return err
 			}
 			filter := ""
 			if len(args) == 1 {
 				filter = args[0]
 			}
-
-			cat, stale, err := agentdex.LoadCatalog(cmd.Context(), cfg.CatalogOptions(cfg.CatalogTTL)...)
+			// The listing always requests EnrichFull: its JSON payload carries each
+			// agent's full model array while the text column renders that array's
+			// length, so a lower level would change the models key's shape (R15). The
+			// library owns detection, enrichment, the agnostic/home rules, boundary
+			// provider validation, degrade classification, and the by-id order (R8, R14).
+			res, err := idx.Agents.List(cmd.Context(), agentdex.AgentQuery{
+				Filter:    filter,
+				Installed: installed,
+				Providers: flattenProviders(providers),
+				Enrich:    agentdex.EnrichFull,
+			})
+			warnings := libWarnings(res.Warnings)
 			if err != nil {
-				return a.fail(cmd, codeFor(err), err)
+				return a.fail(cmd, codeFor(err), err, warnings...)
 			}
-			var warnings []string
-			if stale {
-				warnings = append(warnings, staleCatalogWarning)
-			}
+			a.log.Debug("list agents", "count", len(res.Items), "installed", installed, "filter", filter)
 
-			callerProviders := flattenProviders(providers)
-			base := append(cfg.LibraryOptions(flags), agentdex.WithCatalog(cat))
-			if len(callerProviders) > 0 {
-				base = append(base, agentdex.WithProviders(callerProviders...))
-			}
-			if !installed {
-				base = append(base, agentdex.IncludeMissing())
-			}
-			// Probe models.dev once for reachability, reusing this client for the
-			// enrichment below so the catalog is fetched at most once (the client
-			// memoises it). Enrichment is served from the warm cache with no network
-			// and degrades to a nil model list when models.dev is unreachable, so a
-			// model count column is shown without ever failing the listing. But an
-			// unreachable-and-uncached models.dev warns, so the resulting zero reads as
-			// "unavailable" rather than a genuine empty catalog — as loud as get's
-			// degrade and the schema-drift branch below. A malformed catalog is left to
-			// that branch (Catalog does not surface per-provider drift). The defensive
-			// copy keeps base intact for the schema-drift fallback.
-			client := cfg.ModelsClient()
-			// Validate caller-supplied provider ids at the boundary so an unknown id
-			// is a usage fault regardless of whether an agnostic agent is installed to
-			// enrich against it. Schema drift and unreachability defer to the
-			// enrichment path's existing tolerance below.
-			if len(callerProviders) > 0 {
-				if verr := agentdex.ValidateCallerProviders(cmd.Context(), client, callerProviders); errors.Is(verr, agentdex.ErrUnknownProvider) {
-					return a.fail(cmd, codeFor(verr), verr, warnings...)
-				}
-			}
-			opts := append(append([]agentdex.Option(nil), base...), agentdex.WithModels(client, agentdex.EnrichModels()))
-			if _, cerr := client.Catalog(cmd.Context()); cerr != nil && !errors.Is(cerr, modelsdev.ErrModelsSchema) {
-				warnings = append(warnings, "model counts unavailable: models.dev is unreachable and not cached")
-				opts = base
-			}
-
-			agents, err := agentdex.Detect(cmd.Context(), opts...)
-			if errors.Is(err, modelsdev.ErrModelsSchema) {
-				// Malformed models.dev data would otherwise kill the whole listing over
-				// an auxiliary column. Detection itself is sound, so re-detect without
-				// enrichment and warn: the drift stays loud, but list keeps working.
-				warnings = append(warnings, fmt.Sprintf("model counts omitted: %v", err))
-				agents, err = agentdex.Detect(cmd.Context(), base...)
-			}
-			if err != nil {
-				// Unknown caller providers are usage faults; list otherwise soft-skips
-				// agnostic agents without providers so a mixed catalog never fails.
-				return a.fail(cmd, codeFor(err), err)
-			}
-			if filter != "" {
-				agents = filterAgents(agents, filter)
-			}
-			a.log.Debug("list agents", "count", len(agents), "installed", installed, "filter", filter)
-
-			recs := make([]*record, len(agents))
-			for i := range agents {
-				r := agentRecord(&agents[i])
-				ka, ok := cat.Agents[agents[i].ID]
-				if ok && ka.Agnostic && len(callerProviders) == 0 {
+			recs := make([]*record, len(res.Items))
+			for i := range res.Items {
+				ag := &res.Items[i]
+				r := agentRecord(ag)
+				if ag.Enrichment == agentdex.EnrichNotApplicable {
 					// Not applicable: JSON null / text "-", not the degrade [] / 0 shape.
 					withModelsNA(r)
 				} else {
-					withModels(r, agents[i].Models)
+					withModels(r, ag.Models)
 				}
 				recs[i] = r
 			}
@@ -150,8 +98,8 @@ func (a *app) newAgentsListCmd() *cobra.Command {
 			}
 			if orderBy == "" {
 				// The default view groups detected agents ahead of the not-found tail;
-				// the stable sort keeps the id ordering within each group.
-				// An explicit --order-by is a pure field sort with no such grouping.
+				// the stable sort keeps the id ordering within each group. An explicit
+				// --order-by is a pure field sort with no such grouping (R14).
 				sort.SliceStable(recs, func(i, j int) bool { return recordFound(recs[i]) && !recordFound(recs[j]) })
 			}
 
@@ -198,20 +146,6 @@ func recordFound(r *record) bool {
 	return found
 }
 
-// filterAgents narrows detected agents to those whose id or name contains the
-// browse filter (case-insensitive), applied after detection so enrichment and the
-// --installed/--provider/--verbose behaviour are unchanged by the filter.
-func filterAgents(agents []agentdex.Agent, filter string) []agentdex.Agent {
-	needle := strings.ToLower(filter)
-	out := make([]agentdex.Agent, 0, len(agents))
-	for _, ag := range agents {
-		if matchesFilter(ag.ID, ag.Name, needle) {
-			out = append(out, ag)
-		}
-	}
-	return out
-}
-
 func (a *app) newAgentsGetCmd() *cobra.Command {
 	var (
 		models    bool
@@ -229,85 +163,50 @@ func (a *app) newAgentsGetCmd() *cobra.Command {
 			"An id that names no catalogued agent is not-found (exit 3).",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := a.requireConfig()
+			idx, err := a.index(cmd)
 			if err != nil {
-				return a.failConfig(cmd, err)
+				return err
 			}
-			flags, err := a.mapFlags()
-			if err != nil {
-				return a.usage(cmd, err)
-			}
-
-			cat, stale, err := agentdex.LoadCatalog(cmd.Context(), cfg.CatalogOptions(cfg.CatalogTTL)...)
-			if err != nil {
-				return a.fail(cmd, codeFor(err), err)
-			}
-			var warnings []string
-			if stale {
-				warnings = append(warnings, staleCatalogWarning)
-			}
-
-			// Exact fetch: the id is the catalog key, no fuzzy resolution and no
-			// provider fallthrough. A miss is not-found with no candidate list.
 			id := args[0]
-			ka, ok := cat.Agents[id]
-			if !ok {
-				return a.fail(cmd, codeNotFound, fmt.Errorf("no agent %q; run \"agentdex agents list\" to see agent ids", id), warnings...)
-			}
-			a.log.Debug("get resolved agent", "id", id)
 
-			callerProviders := flattenProviders(providers)
-			if !ka.Agnostic && len(callerProviders) > 0 {
-				return a.fail(cmd, codeUsage, fmt.Errorf("agent %q has catalog providers; --provider is only valid for provider-agnostic agents", id), warnings...)
-			}
-
-			// Soft path: unfiltered agnostic get without --provider and without --models.
-			softPath := ka.Agnostic && len(callerProviders) == 0 && len(fields) == 0 && !models
-			if softPath {
-				return a.getAgnosticSoftPath(cmd, cfg, flags, cat, id, warnings)
-			}
-			if ka.Agnostic && len(callerProviders) == 0 && providerRelatedDemand(models, fields) {
-				return a.fail(cmd, codeUsage, fmt.Errorf("%w: %q is provider-agnostic; supply --provider with models.dev provider ids", agentdex.ErrProvidersRequired, id), warnings...)
-			}
-
-			detectOpts := append(cfg.LibraryOptions(flags), agentdex.WithCatalog(cat))
-			if len(callerProviders) > 0 {
-				detectOpts = append(detectOpts, agentdex.WithProviders(callerProviders...))
-			}
-			agent, found, err := agentdex.DetectOne(cmd.Context(), id, detectOpts...)
+			// Map the requested output to the lowest enrichment level that can fill it,
+			// so a field selection never pays for data it does not show (R15). The
+			// library owns the agnostic/home rules, coverage, not-installed status, and
+			// the warnings; the CLI only translates its own flags into a level and maps
+			// the returned facts to exit codes and remedies.
+			detail, err := idx.Agents.Get(cmd.Context(), id, agentdex.AgentGetQuery{
+				Providers: flattenProviders(providers),
+				Enrich:    agentGetLevel(models, fields),
+			})
+			warnings := libWarnings(detail.Warnings)
 			if err != nil {
-				return a.fail(cmd, codeFor(err), err, warnings...)
+				return a.fail(cmd, codeFor(err), agentGetError(err, id), warnings...)
 			}
-			if !found {
-				// Not installed is a detection status, not a catalog miss: the lookup
-				// already succeeded, so report the agent at exit 0 and warn. A
-				// not-installed agent triggers no models.dev round-trip, so an agnostic
-				// agent's caller-supplied providers are reported here as-is, unvalidated;
-				// unknown ids are rejected only on the Found path (getAgnosticEnrich).
-				msg := fmt.Sprintf("agent %q is catalogued but not installed", id)
-				if models || modelsDevDemand(fields) {
-					// The requested models.dev-backed fields need the detected binary's
-					// round-trip that not-installed skips, so name the omission rather
-					// than dropping it silently, matching the unreachable-degrade warnings.
-					msg += ": models and provider-env omitted"
+
+			// An agnostic agent resolved without a provider set is not-applicable. An
+			// unfiltered detail is a browse: emit the guidance warning and exit 0. A
+			// --fields or --models selection that names one of the unfillable fields is
+			// an explicit request the CLI cannot honour, so it is the usage fault (R15).
+			if detail.Enrichment == agentdex.EnrichNotApplicable {
+				if namedProviderField(models, fields) {
+					uerr := fmt.Errorf("%w: %q is provider-agnostic; supply --provider with models.dev provider ids", agentdex.ErrProvidersRequired, id)
+					return a.fail(cmd, codeUsage, uerr, warnings...)
 				}
-				warnings = append(warnings, msg)
-				return a.reportAgent(cmd, agent, fields, warnings)
+				return a.reportSoftPathAgent(cmd, &detail.Agent, warnings)
 			}
 
-			// Non-models.dev field selection: offline catalog facts only. An
-			// agnostic agent with caller-supplied providers is excluded whenever a
-			// provider-related field is selected: providers is caller input there,
-			// not catalog truth, so it must pass validation before being reported.
-			callerDataDemand := ka.Agnostic && providerRelatedDemand(models, fields)
-			if !modelsDevDemand(fields) && !callerDataDemand {
-				return a.reportAgent(cmd, agent, fields, warnings)
+			// Coverage data faults report the agent and then exit 78: the caller maps the
+			// verdict to policy, the library never fails on it (R5, R15). The none-present
+			// message is rebuilt from the resolved provider set; the drift message is the
+			// models.dev decode failure carried in Coverage.Err.
+			switch detail.Coverage.Status {
+			case agentdex.CoverageNonePresent:
+				cerr := fmt.Errorf("catalog data error: no provider of %q is present in models.dev (providers: %s)", id, strings.Join(detail.Providers, ", "))
+				return a.reportAgentError(cmd, &detail.Agent, fields, codeConfig, cerr, warnings)
+			case agentdex.CoverageSchemaDrift:
+				return a.reportAgentError(cmd, &detail.Agent, fields, codeConfig, detail.Coverage.Err, warnings)
 			}
-
-			if ka.Agnostic {
-				return a.getAgnosticEnrich(cmd, cfg, flags, cat, agent, callerProviders, modelsDemand(models, fields), fields, warnings)
-			}
-			return a.getCoverage(cmd, cfg, flags, cat, agent, modelsDemand(models, fields), fields, warnings)
+			return a.reportAgent(cmd, &detail.Agent, fields, warnings)
 		},
 	}
 	cmd.Flags().BoolVar(&models, "models", false, "Fill the per-model list from models.dev")
@@ -317,201 +216,58 @@ func (a *app) newAgentsGetCmd() *cobra.Command {
 	return cmd
 }
 
-// modelsDemand is the OR rule for catalog-agent Models fill: --models, or a
-// non-empty --fields selection that includes models. Empty fields is unfiltered
-// and does not demand Models on its own.
-func modelsDemand(modelsFlag bool, fields []string) bool {
-	if modelsFlag {
-		return true
-	}
-	for _, f := range fields {
-		if f == "models" {
-			return true
-		}
-	}
-	return false
-}
-
-// providerRelatedDemand is the first gate: soft-path / ErrProvidersRequired
-// demand. True when the requested output intersects {providers, provider_env,
-// models}, or --models is set. Unfiltered (empty fields, no --models) counts as
-// demanding all three.
-func providerRelatedDemand(modelsFlag bool, fields []string) bool {
-	if modelsFlag {
-		return true
-	}
-	if len(fields) == 0 {
-		return true
-	}
-	for _, f := range fields {
-		switch f {
-		case "providers", "provider_env", "models":
-			return true
-		}
-	}
-	return false
-}
-
-// modelsDevDemand is the second gate: attach models.dev and enter getCoverage
-// only when the requested output intersects {provider_env, models}. Unfiltered
-// get demands the provider-env path. providers alone is offline catalog data.
-func modelsDevDemand(fields []string) bool {
-	if len(fields) == 0 {
-		return true
-	}
-	for _, f := range fields {
-		if f == "provider_env" || f == "models" {
-			return true
-		}
-	}
-	return false
-}
-
-// getAgnosticSoftPath is unfiltered get on an agnostic agent without --provider:
-// outside facts only, omit the three provider-related fields, warn how to enrich.
-// Exit 0 whether or not the binary is installed; a not-installed agent adds a
-// warning rather than failing. The soft path is structurally unfiltered — a
-// --fields selection never enters it.
-func (a *app) getAgnosticSoftPath(cmd *cobra.Command, cfg *config.Config, flags config.Flags, cat *agentdex.Catalog, id string, warnings []string) error {
-	detectOpts := append(cfg.LibraryOptions(flags), agentdex.WithCatalog(cat))
-	agent, found, err := agentdex.DetectOne(cmd.Context(), id, detectOpts...)
-	if err != nil {
-		return a.fail(cmd, codeFor(err), err, warnings...)
-	}
-	warnings = append(warnings, fmt.Sprintf("%q is provider-agnostic: supply --provider with models.dev provider ids to enrich providers, provider-env, and models", id))
-	if !found {
-		warnings = append(warnings, fmt.Sprintf("agent %q is catalogued but not installed", id))
-	}
-	return a.reportSoftPathAgent(cmd, agent, warnings)
-}
-
-// getAgnosticEnrich enriches a found agnostic agent against caller-supplied
-// providers with no catalog-data-error rollup. Unknown provider ids surface as
-// ErrUnknownProvider (usage). Models fill follows modelsDemand.
-func (a *app) getAgnosticEnrich(cmd *cobra.Command, cfg *config.Config, flags config.Flags, cat *agentdex.Catalog, agent *agentdex.Agent, providers []string, enrich bool, fields, warnings []string) error {
-	client := cfg.ModelsClient()
-	mopts := []agentdex.ModelsOption{}
-	if enrich {
-		mopts = append(mopts, agentdex.EnrichModels())
-	}
-	enrichOpts := append(cfg.LibraryOptions(flags),
-		agentdex.WithCatalog(cat),
-		agentdex.WithProviders(providers...),
-		agentdex.WithModels(client, mopts...),
-		agentdex.WithSkipVersion(),
-	)
-	full, _, err := agentdex.DetectOne(cmd.Context(), agent.ID, enrichOpts...)
-	if err != nil {
-		return a.fail(cmd, codeFor(err), err, warnings...)
-	}
-	if full.ProviderEnv == nil {
-		// With a non-empty caller provider set, a nil ProviderEnv means enrich
-		// degraded: models.dev was never consulted. Warn like getCoverage does.
-		warnings = append(warnings, "models.dev is unreachable and not cached: model enrichment and provider-env omitted")
-	}
-	full.Version = agent.Version
-	sortModelsNewest(full.Models)
-	return a.reportAgent(cmd, full, fields, warnings)
-}
-
-// coverage is the per-provider models.dev rollup verdict for a detected agent.
-type coverage int
-
-const (
-	coverageAllPresent coverage = iota
-	coverageSomePresent
-	coverageNonePresent
-	coverageNoProviders
-	coverageUnreachable
-	coverageSchema
-)
-
-// rollup probes each provider through the public modelsdev client and composes the
-// agent-level verdict. It branches on the schema sentinel before the outage verdict
-// so a reachable models.dev serving malformed data is always a data fault, never
-// misread as an outage — whether the drift is one provider's model (found, error)
-// or a whole-document fault that fails the load (not found, error). Only a non-schema
-// load failure is an outage. The first provider call that fails to load decides the
-// outage verdict; once any call succeeds the catalog is memoised and no later call
-// can report an outage.
-func (a *app) rollup(ctx context.Context, client *modelsdev.Client, providers []string) (coverage, []string, []string, error) {
-	if len(providers) == 0 {
-		return coverageNoProviders, nil, nil, nil
-	}
-	var present, absent []string
-	for _, pid := range providers {
-		_, found, err := client.Provider(ctx, pid)
-		switch {
-		case errors.Is(err, modelsdev.ErrModelsSchema):
-			return coverageSchema, nil, nil, err
-		case err != nil:
-			return coverageUnreachable, nil, nil, err
-		case !found:
-			absent = append(absent, pid)
-		default:
-			present = append(present, pid)
-		}
-	}
+// agentGetLevel maps the requested output to the lowest enrichment level that fills
+// it (R15): --models or a selected models field needs the full model list; an
+// unfiltered detail or a selected provider_env needs the count level (provider-env
+// and coverage); providers alone is offline catalog data; anything else is offline
+// facts only.
+func agentGetLevel(models bool, fields []string) agentdex.Enrich {
 	switch {
-	case len(present) == 0:
-		return coverageNonePresent, present, absent, nil
-	case len(absent) > 0:
-		return coverageSomePresent, present, absent, nil
+	case models || containsField(fields, "models"):
+		return agentdex.EnrichFull
+	case len(fields) == 0 || containsField(fields, "provider_env"):
+		return agentdex.EnrichCount
+	case containsField(fields, "providers"):
+		return agentdex.EnrichProviders
 	default:
-		return coverageAllPresent, present, absent, nil
+		return agentdex.EnrichNone
 	}
 }
 
-// getCoverage applies the coverage rollup table to a detected agent: it reports
-// and exits per the verdict, enriching from the present providers on the exit-0
-// rows and keeping the unreachable degrade distinct from the absent-provider data
-// fault.
-func (a *app) getCoverage(cmd *cobra.Command, cfg *config.Config, flags config.Flags, cat *agentdex.Catalog, agent *agentdex.Agent, enrich bool, fields, warnings []string) error {
-	client := cfg.ModelsClient()
-	verdict, present, absent, rerr := a.rollup(cmd.Context(), client, agent.Providers)
-	a.log.Debug("get coverage rollup", "agent", agent.ID, "verdict", verdict, "present", present, "absent", absent)
-
-	switch verdict {
-	case coverageUnreachable:
-		warnings = append(warnings, "models.dev is unreachable and not cached: model enrichment and provider-env omitted")
-		return a.reportAgent(cmd, agent, fields, warnings)
-
-	case coverageSchema:
-		return a.reportAgentError(cmd, agent, fields, codeConfig, rerr, warnings)
-
-	case coverageNonePresent:
-		err := fmt.Errorf("catalog data error: no provider of %q is present in models.dev (providers: %s)", agent.ID, strings.Join(agent.Providers, ", "))
-		return a.reportAgentError(cmd, agent, fields, codeConfig, err, warnings)
-
-	case coverageNoProviders:
-		return a.reportAgent(cmd, agent, fields, warnings)
-	}
-
-	// All-present or some-present: enrich from the present providers for display.
-	// Provider-env shows regardless of enrich, so a client is always attached. The
-	// version was already probed by the first detection, so this pass skips the exec
-	// and carries that version forward — a successful get probes the binary once.
-	mopts := []agentdex.ModelsOption{}
-	if enrich {
-		mopts = append(mopts, agentdex.EnrichModels())
-	}
-	enrichOpts := append(cfg.LibraryOptions(flags), agentdex.WithCatalog(cat), agentdex.WithModels(client, mopts...), agentdex.WithSkipVersion())
-	full, _, err := agentdex.DetectOne(cmd.Context(), agent.ID, enrichOpts...)
-	if err != nil {
-		return a.fail(cmd, codeFor(err), err, warnings...)
-	}
-	full.Version = agent.Version
-	// Newest release first for display; both the text table and the JSON models
-	// array follow this order.
-	sortModelsNewest(full.Models)
-	if verdict == coverageSomePresent {
-		warnings = append(warnings, fmt.Sprintf("some providers are absent from models.dev: %s", strings.Join(absent, ", ")))
-	}
-	return a.reportAgent(cmd, full, fields, warnings)
+// namedProviderField reports whether the requested output explicitly names a field
+// the not-applicable state leaves empty — providers, provider_env, or models, or the
+// --models flag. An unfiltered detail names none, so it is a browse (R15).
+func namedProviderField(models bool, fields []string) bool {
+	return models || containsField(fields, "providers") ||
+		containsField(fields, "provider_env") || containsField(fields, "models")
 }
 
-// reportAgent renders a detected agent at exit 0: the JSON record under --json,
-// selected fields for scripting under --fields, otherwise the full detail view.
+// containsField reports whether fields names key.
+func containsField(fields []string, key string) bool {
+	for _, f := range fields {
+		if f == key {
+			return true
+		}
+	}
+	return false
+}
+
+// agentGetError appends the CLI's own remedy clause to the get faults the library
+// owns, naming a subcommand or flag only the CLI has (R7). The exit code is taken
+// from the underlying sentinel before this wrapping.
+func agentGetError(err error, id string) error {
+	switch {
+	case errors.Is(err, agentdex.ErrAgentUnknown):
+		return errors.New(err.Error() + "; run \"agentdex agents list\" to see agent ids")
+	case errors.Is(err, agentdex.ErrProvidersNotAllowed):
+		return errors.New(err.Error() + "; --provider is only valid for provider-agnostic agents")
+	default:
+		return err
+	}
+}
+
+// reportAgent renders an agent at exit 0: the JSON record under --json, selected
+// fields for scripting under --fields, otherwise the full detail view.
 func (a *app) reportAgent(cmd *cobra.Command, agent *agentdex.Agent, fields, warnings []string) error {
 	r := agentReportRecord(agent)
 	fs, err := r.resolve(fields)
@@ -555,8 +311,9 @@ func agentReportRecord(agent *agentdex.Agent) *record {
 	return r
 }
 
-// reportSoftPathAgent renders the soft-path success payload at exit 0: the
-// without-providers record, so the three provider-related keys are absent.
+// reportSoftPathAgent renders the not-applicable (agnostic, no provider set) payload
+// at exit 0: the without-providers record, so the three provider-related keys are
+// absent.
 func (a *app) reportSoftPathAgent(cmd *cobra.Command, agent *agentdex.Agent, warnings []string) error {
 	r := agentRecordWithoutProviders(agent)
 	fs, _ := r.resolve(nil)
@@ -602,7 +359,7 @@ func renderAgentDetailFields(w io.Writer, r *record, agent *agentdex.Agent, verb
 		// a found agent shows the path with "(found)", a not-installed one already
 		// reads "missing" from the record.
 		if f.key == "bin" {
-			if agent.Found {
+			if agent.Detection.Found {
 				f.text += " " + styledState("found", true)
 			} else {
 				f.text = tui.Warn.Sprint(f.text)
@@ -649,15 +406,16 @@ func renderAgentDetail(w io.Writer, agent *agentdex.Agent, verbose bool) {
 // verbose detail view, or "" for a field that names no directory or carries no
 // path (so an absent-concept "-" is not annotated as a missing directory).
 func existenceNote(key string, agent *agentdex.Agent) string {
+	d := agent.Detection
 	var path string
 	var exists bool
 	switch key {
 	case "config_dir":
-		path, exists = agent.Config.Global, agent.Config.GlobalExists
+		path, exists = d.Config.Global, d.Config.GlobalExists
 	case "config_local_dir":
-		path, exists = agent.Config.Local, agent.Config.LocalExists
+		path, exists = d.Config.Local, d.Config.LocalExists
 	case "skills_dir":
-		path, exists = agent.Skills.Global, agent.Skills.GlobalExists
+		path, exists = d.Skills.Global, d.Skills.GlobalExists
 	default:
 		return ""
 	}

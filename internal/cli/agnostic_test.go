@@ -175,10 +175,11 @@ func TestGetAgnosticSoftPathNotInstalled(t *testing.T) {
 }
 
 func TestGetAgnosticProviderNotInstalled(t *testing.T) {
-	// With --provider and not Found: exit 0 with a not-installed warning, providers
-	// carries the caller ids, provider_env and models stay omitted (no models.dev
-	// client until Found), and no soft-path warning — the caller already supplied
-	// providers.
+	// Enrichment no longer depends on installation (R4, exception one): with --provider
+	// and not Found, the agent enriches exactly as an installed agnostic agent does —
+	// exit 0 with a not-installed warning, providers carries the caller ids, provider_env
+	// is filled (an unfiltered detail maps to the count level), models stays omitted
+	// without --models, and no soft-path warning since the caller supplied providers.
 	newScenario(t, "") // delta binary not installed
 
 	got := runCLI("--json", "agents", "get", "delta-agent", "--provider", "anthropic")
@@ -197,10 +198,11 @@ func TestGetAgnosticProviderNotInstalled(t *testing.T) {
 	if !ok || len(provs) != 1 || provs[0] != "anthropic" {
 		t.Errorf("providers = %v, want [anthropic]", data["providers"])
 	}
-	for _, key := range []string{"provider_env", "models"} {
-		if _, ok := data[key]; ok {
-			t.Errorf("not-installed get --provider should omit %q: %v", key, data)
-		}
+	if _, ok := data["provider_env"]; !ok {
+		t.Errorf("not-installed get --provider should now fill provider_env like an installed agent: %v", data)
+	}
+	if _, ok := data["models"]; ok {
+		t.Errorf("get --provider without --models should omit models: %v", data)
 	}
 	if anyContains(env.Warnings, "provider-agnostic") {
 		t.Errorf("soft-path warning should not fire with --provider: %v", env.Warnings)

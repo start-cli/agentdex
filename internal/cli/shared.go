@@ -18,19 +18,6 @@ func emptyListMessage(filter, noun, fallback string) string {
 	return fallback
 }
 
-// staleCatalogWarning is the single warning every command emits when the catalog
-// load returns stale, so the wording never drifts between the noun surfaces.
-const staleCatalogWarning = "agentdex catalog is stale: re-resolution failed, using the last resolved version"
-
-// matchesFilter is the shared browse narrowing for every list verb: it reports
-// whether id or name contains needle, which the caller has already lower-cased.
-// It is deliberately not the none/one/many selector — a list filter is tolerant of
-// zero and many matches, so it never resolves an identity.
-func matchesFilter(id, name, needle string) bool {
-	return strings.Contains(strings.ToLower(id), needle) ||
-		strings.Contains(strings.ToLower(name), needle)
-}
-
 // flattenProviders normalises --provider values: StringSlice already csv-splits,
 // but empty entries from accidental commas are dropped, as are duplicate ids
 // (a repeated id would double-list models and break unique query resolution).

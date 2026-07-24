@@ -4,11 +4,10 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
-	"strings"
 
 	"github.com/spf13/cobra"
 
+	"github.com/start-cli/agentdex"
 	"github.com/start-cli/agentdex/internal/tui"
 	"github.com/start-cli/agentdex/modelsdev"
 )
@@ -41,15 +40,15 @@ func (a *app) newProvidersListCmd() *cobra.Command {
 			"nothing prints an empty listing and exits 0.",
 		Args: cobra.MaximumNArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := a.requireConfig()
+			idx, err := a.index(cmd)
 			if err != nil {
-				return a.failConfig(cmd, err)
+				return err
 			}
 			filter := ""
 			if len(args) == 1 {
 				filter = args[0]
 			}
-			return a.providersList(cmd, cfg.ModelsClient(), filter, fields, orderBy, reverse)
+			return a.providersList(cmd, idx, filter, fields, orderBy, reverse)
 		},
 	}
 	registerFieldsFlag(cmd, &fields)
@@ -58,24 +57,20 @@ func (a *app) newProvidersListCmd() *cobra.Command {
 	return cmd
 }
 
-// providersList fetches the merged models.dev catalog, narrows it by the filter,
-// and reports the providers ordered by --order-by (by id by default). It reads
-// env-var presence at the boundary through os.LookupEnv and loads no agent catalog:
-// a provider listing is a pure models.dev surface.
-func (a *app) providersList(cmd *cobra.Command, client *modelsdev.Client, filter string, fields []string, orderBy string, reverse bool) error {
-	cat, err := client.Catalog(cmd.Context())
+// providersList browses providers through the library, which returns them ordered
+// by id with each API-key variable's presence resolved. It then applies the CLI's
+// arbitrary-field ordering and renders. A provider listing loads no agent catalog
+// and raises no warnings.
+func (a *app) providersList(cmd *cobra.Command, idx *agentdex.Index, filter string, fields []string, orderBy string, reverse bool) error {
+	res, err := idx.Providers.List(cmd.Context(), agentdex.ProviderQuery{Filter: filter})
 	if err != nil {
-		return a.fail(cmd, providersCode(err), err)
+		return a.fail(cmd, codeFor(err), err)
 	}
 
-	needle := strings.ToLower(filter)
-	var recs []*record
-	for _, id := range sortedKeys(cat.Providers) {
-		p := cat.Providers[id]
-		if needle != "" && !matchesFilter(p.ID, p.Name, needle) {
-			continue
-		}
-		recs = append(recs, providerRecord(p, envPresence(p.Env, os.LookupEnv)))
+	recs := make([]*record, len(res.Items))
+	for i := range res.Items {
+		p := res.Items[i]
+		recs[i] = providerRecord(p.Provider, p.EnvPresent)
 	}
 	sortKey, err := applyOrder(recs, providerFieldSet, orderBy, reverse)
 	if err != nil {
@@ -112,11 +107,11 @@ func (a *app) newProvidersGetCmd() *cobra.Command {
 			"(exit 3).",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			cfg, err := a.requireConfig()
+			idx, err := a.index(cmd)
 			if err != nil {
-				return a.failConfig(cmd, err)
+				return err
 			}
-			return a.providersGet(cmd, cfg.ModelsClient(), args[0], models, fields)
+			return a.providersGet(cmd, idx, args[0], models, fields)
 		},
 	}
 	cmd.Flags().BoolVar(&models, "models", false, "Fill the per-model table from models.dev")
@@ -125,28 +120,22 @@ func (a *app) newProvidersGetCmd() *cobra.Command {
 	return cmd
 }
 
-// providersGet fetches one provider by exact id and renders it as a detail view
-// structurally mirroring agents get: the provider's facts, a symmetric-marker
-// provider-env section, and its models as a count by default or the full table
-// under --models. Env presence is read at the boundary through os.LookupEnv. An
-// unknown id is not-found; an outage with no cache is transient and gross schema
-// drift is config, per providersCode.
-func (a *app) providersGet(cmd *cobra.Command, client *modelsdev.Client, id string, models bool, fields []string) error {
-	p, found, err := client.Provider(cmd.Context(), id)
+// providersGet fetches one provider by exact id through the library and renders it
+// as a detail view structurally mirroring agents get: the provider's facts, a
+// symmetric-marker provider-env section, and its models as a count by default or the
+// full table under --models. An unknown id is not-found, with the CLI naming the
+// providers-list remedy the library does not own (R7).
+func (a *app) providersGet(cmd *cobra.Command, idx *agentdex.Index, id string, models bool, fields []string) error {
+	p, err := idx.Providers.Get(cmd.Context(), id)
 	if err != nil {
-		return a.fail(cmd, providersCode(err), err)
+		return a.fail(cmd, codeFor(err), providersGetError(err))
 	}
-	if !found {
-		return a.fail(cmd, codeNotFound, fmt.Errorf("no models.dev provider %q; run \"agentdex providers list\" to see provider ids", id))
-	}
-	a.log.Debug("providers get resolved", "provider", id, "models", models)
-
-	present := envPresence(p.Env, os.LookupEnv)
+	present := p.EnvPresent
 	// Unlike agents get, the models array is always carried in JSON: a provider's
 	// models are already in hand from this one fetch (no enrichment round-trip), so
 	// --models governs only the text view, and .data.models stays uniform with
 	// providers list.
-	r := providerRecord(p, present)
+	r := providerRecord(p.Provider, present)
 	fs, err := r.resolve(fields)
 	if err != nil {
 		return a.usage(cmd, err)
@@ -158,8 +147,19 @@ func (a *app) providersGet(cmd *cobra.Command, client *modelsdev.Client, id stri
 			return
 		}
 		// In the detail branch fields is empty, so fs is the full resolved record.
-		renderProviderDetail(w, fs, p, present, models)
+		renderProviderDetail(w, fs, p.Provider, present, models)
 	})
+}
+
+// providersGetError appends the CLI's own remedy clause to a provider not-found
+// fault, naming a subcommand only the CLI has (R7). It is kept separate from
+// classification so codeFor reads the original ErrNotFound sentinel before this
+// wrapping — a plain errors.New would drop the wrap and misclassify the exit code.
+func providersGetError(err error) error {
+	if errors.Is(err, agentdex.ErrNotFound) {
+		return errors.New(err.Error() + "; run \"agentdex providers list\" to see provider ids")
+	}
+	return err
 }
 
 // providerFactFields are the scalar facts rendered inline in the provider detail
@@ -209,27 +209,4 @@ func renderProviderDetail(w io.Writer, fs []field, p modelsdev.Provider, present
 	if len(rows) > 0 {
 		renderPriceFooter(w, modelFieldSet.defaults)
 	}
-}
-
-// envPresence reads whether each of a provider's API-key variables is set, through
-// an injected lookup (os.LookupEnv in production) so record building is testable
-// from inputs without t.Setenv. Only presence is read, never the value.
-func envPresence(env []string, lookup func(string) (string, bool)) map[string]bool {
-	present := make(map[string]bool, len(env))
-	for _, name := range env {
-		_, ok := lookup(name)
-		present[name] = ok
-	}
-	return present
-}
-
-// providersCode classifies a providers-command failure. A no-result models.dev
-// outage is transient; recognisable gross schema drift is a data fault, config,
-// never transient. This mirrors the tail of modelsCode without the selector-match
-// codes, which this browse surface cannot raise.
-func providersCode(err error) int {
-	if errors.Is(err, modelsdev.ErrModelsSchema) {
-		return codeConfig
-	}
-	return codeTransient
 }

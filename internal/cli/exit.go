@@ -52,23 +52,29 @@ func codeForConfig(err error) int {
 	}
 }
 
-// codeFor maps a library error to the exit code that best describes it, for the
-// failures a command does not classify by hand. The coverage rollup in get
-// chooses its codes directly; this covers catalog-load and enrichment faults.
+// codeFor maps a library error to the exit code that describes it (R15). The
+// library never chooses an exit code; it returns typed sentinels, and this is the
+// single place that classifies them. A reachable models.dev serving malformed data
+// is a data fault (config), never a transient outage; a catalog or models.dev
+// outage is transient; an exact-get miss is not-found; a caller/usage fault is
+// usage.
 func codeFor(err error) int {
 	switch {
-	case errors.Is(err, config.ErrConfig):
+	case errors.Is(err, config.ErrConfig),
+		errors.Is(err, agentdex.ErrCatalogInvalid),
+		errors.Is(err, modelsdev.ErrModelsSchema):
 		return codeConfig
-	case errors.Is(err, modelsdev.ErrModelsSchema):
-		// A reachable models.dev serving a malformed model is a data fault, not a
-		// transient outage: report it as config, never as transient.
-		return codeConfig
-	case errors.Is(err, agentdex.ErrProvidersRequired), errors.Is(err, agentdex.ErrUnknownProvider):
-		return codeUsage
-	case errors.Is(err, agentdex.ErrCatalogUnavailable):
+	case errors.Is(err, agentdex.ErrCatalogUnavailable),
+		errors.Is(err, agentdex.ErrModelsUnavailable):
 		return codeTransient
-	case errors.Is(err, agentdex.ErrAgentUnknown):
+	case errors.Is(err, agentdex.ErrAgentUnknown),
+		errors.Is(err, agentdex.ErrNotFound):
 		return codeNotFound
+	case errors.Is(err, agentdex.ErrUnknownProvider),
+		errors.Is(err, agentdex.ErrProvidersRequired),
+		errors.Is(err, agentdex.ErrProvidersNotAllowed),
+		errors.Is(err, agentdex.ErrMalformedModelID):
+		return codeUsage
 	default:
 		return codeFailure
 	}

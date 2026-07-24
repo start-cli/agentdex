@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/start-cli/agentdex"
 )
 
 func anyContains(ss []string, sub string) bool {
@@ -284,10 +286,11 @@ func TestGetNotInstalled(t *testing.T) {
 	}
 }
 
-func TestGetNotInstalledEnrichmentOmissionWarning(t *testing.T) {
-	// Requesting a models.dev-backed field on a not-installed agent names the
-	// omission in the warning, since the round-trip that fills it is skipped;
-	// requesting only offline catalog fields warns not-installed without the note.
+func TestGetNotInstalledStillEnriches(t *testing.T) {
+	// Enrichment no longer depends on installation (R4). --models on a not-installed
+	// agent fills the same model list an installed one fills, and the not-installed
+	// warning is the bare status with no omission suffix (R6, exception one). A purely
+	// offline field selection still warns not-installed and carries no omission note.
 	srv := modelsServer(t, []string{"anthropic"})
 	newScenario(t, srv.URL) // no binaries installed
 
@@ -295,8 +298,18 @@ func TestGetNotInstalledEnrichmentOmissionWarning(t *testing.T) {
 	if enrich.code != codeOK {
 		t.Fatalf("--models not-installed exit = %d, want 0; stderr=%q", enrich.code, enrich.stderr)
 	}
-	if !anyContains(enrich.envelope(t).Warnings, "not installed: models and provider-env omitted") {
-		t.Errorf("--models not-installed warnings = %v, want the omission note", enrich.envelope(t).Warnings)
+	env := enrich.envelope(t)
+	if !hasExact(env.Warnings, `agent "alpha-cli" is catalogued but not installed`) {
+		t.Errorf("--models not-installed warnings = %v, want the bare not-installed status", env.Warnings)
+	}
+	for _, w := range env.Warnings {
+		if strings.Contains(w, "omitted") {
+			t.Errorf("not-installed warning must no longer carry the omission suffix: %q", w)
+		}
+	}
+	data := env.Data.(map[string]any)
+	if models, ok := data["models"].([]any); !ok || len(models) == 0 {
+		t.Errorf("--models on a not-installed agent should fill the model list, got %v", data["models"])
 	}
 
 	offline := runCLI("--json", "agents", "get", "alpha-cli", "--fields", "bin")
@@ -443,25 +456,31 @@ func TestGetTextDetailDrivenByRecord(t *testing.T) {
 	}
 }
 
-func TestModelsDemand(t *testing.T) {
+func TestAgentGetLevel(t *testing.T) {
+	// agents get maps its requested output to the lowest enrichment level that can
+	// fill it (R15): --models or a selected models field needs the full model list;
+	// an unfiltered detail or a selected provider_env needs the count level; providers
+	// alone is offline catalog data; anything else is offline facts only.
 	cases := []struct {
 		name   string
 		flag   bool
 		fields []string
-		want   bool
+		want   agentdex.Enrich
 	}{
-		{"unfiltered", false, nil, false},
-		{"empty fields", false, []string{}, false},
-		{"flag only", true, nil, true},
-		{"fields models", false, []string{"models"}, true},
-		{"fields other", false, []string{"skills_dir"}, false},
-		{"flag and omit fields", true, []string{"skills_dir"}, true},
-		{"fields models among others", false, []string{"id", "models"}, true},
+		{"unfiltered detail", false, nil, agentdex.EnrichCount},
+		{"empty fields is unfiltered", false, []string{}, agentdex.EnrichCount},
+		{"provider_env selected", false, []string{"provider_env"}, agentdex.EnrichCount},
+		{"providers only", false, []string{"providers"}, agentdex.EnrichProviders},
+		{"non-provider fields", false, []string{"id", "bin", "skills_dir"}, agentdex.EnrichNone},
+		{"models flag", true, nil, agentdex.EnrichFull},
+		{"models field", false, []string{"models"}, agentdex.EnrichFull},
+		{"models field among others", false, []string{"id", "models"}, agentdex.EnrichFull},
+		{"flag wins over non-provider fields", true, []string{"skills_dir"}, agentdex.EnrichFull},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := modelsDemand(tc.flag, tc.fields); got != tc.want {
-				t.Errorf("modelsDemand(%v, %v) = %v, want %v", tc.flag, tc.fields, got, tc.want)
+			if got := agentGetLevel(tc.flag, tc.fields); got != tc.want {
+				t.Errorf("agentGetLevel(%v, %v) = %v, want %v", tc.flag, tc.fields, got, tc.want)
 			}
 		})
 	}

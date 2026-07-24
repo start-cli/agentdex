@@ -17,6 +17,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/start-cli/agentdex"
 	"github.com/start-cli/agentdex/internal/config"
 	"github.com/start-cli/agentdex/internal/tui"
 )
@@ -174,6 +175,48 @@ func (a *app) requireConfig() (*config.Config, error) {
 		return nil, a.cfgErr
 	}
 	return a.cfg, nil
+}
+
+// index opens the library Index for one command from the loaded config, the global
+// flags, and the --debug logger, so every command is a thin shell over the same
+// facade. Open performs no I/O; the catalog and models.dev are resolved lazily on
+// the first operation that needs them (R12). A returned error is already rendered as
+// an *exitError, so a caller returns it verbatim: a config-load fault classifies
+// through failConfig, a malformed --bin-path is a usage fault.
+func (a *app) index(cmd *cobra.Command) (*agentdex.Index, error) {
+	cfg, err := a.requireConfig()
+	if err != nil {
+		return nil, a.failConfig(cmd, err)
+	}
+	flags, err := a.mapFlags()
+	if err != nil {
+		return nil, a.usage(cmd, err)
+	}
+	opts := append(cfg.Options(flags), agentdex.WithLogger(a.log))
+	idx, err := agentdex.Open(cmd.Context(), opts...)
+	if err != nil {
+		return nil, a.fail(cmd, codeFor(err), err)
+	}
+	return idx, nil
+}
+
+// libWarnings renders the library's structured warnings as the strings the CLI
+// emits, verbatim except for WarnProvidersRequired, whose remedy clause names the
+// CLI's own --provider flag and so is appended here rather than owned by the
+// library (R6).
+func libWarnings(ws []agentdex.Warning) []string {
+	if len(ws) == 0 {
+		return nil
+	}
+	out := make([]string, len(ws))
+	for i, w := range ws {
+		msg := w.Msg
+		if w.Kind == agentdex.WarnProvidersRequired {
+			msg += ": supply --provider with models.dev provider ids to enrich providers, provider-env, and models"
+		}
+		out[i] = msg
+	}
+	return out
 }
 
 // failConfig reports a config-load failure with the exit code its cause warrants:
