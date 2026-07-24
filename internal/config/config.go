@@ -36,12 +36,12 @@ var schemaSrc string
 // callers never re-parse strings.
 type Config struct {
 	CatalogModule string
+	CatalogDir    string
 	CatalogTTL    time.Duration
 	ModelsURL     string
 	ModelsTTL     time.Duration
 	SearchDirs    []string
 	BinPaths      map[string]string
-	Disabled      []string
 	Color         string
 }
 
@@ -51,16 +51,16 @@ type raw struct {
 	CacheTTL string `json:"cache_ttl"`
 	Catalog  struct {
 		Module string `json:"module"`
+		Dir    string `json:"dir"`
 		TTL    string `json:"ttl"`
 	} `json:"catalog"`
 	Models struct {
 		URL string `json:"url"`
 		TTL string `json:"ttl"`
 	} `json:"models"`
-	SearchDirs     []string          `json:"search_dirs"`
-	BinPaths       map[string]string `json:"bin_paths"`
-	DisabledAgents []string          `json:"disabled_agents"`
-	Color          string            `json:"color"`
+	SearchDirs []string          `json:"search_dirs"`
+	BinPaths   map[string]string `json:"bin_paths"`
+	Color      string            `json:"color"`
 }
 
 // Path resolves the config.cue location from $XDG_CONFIG_HOME with the documented
@@ -161,12 +161,12 @@ func resolve(r *raw) (*Config, error) {
 	}
 	return &Config{
 		CatalogModule: r.Catalog.Module,
+		CatalogDir:    r.Catalog.Dir,
 		CatalogTTL:    catalogTTL,
 		ModelsURL:     r.Models.URL,
 		ModelsTTL:     modelsTTL,
 		SearchDirs:    r.SearchDirs,
 		BinPaths:      r.BinPaths,
-		Disabled:      r.DisabledAgents,
 		Color:         r.Color,
 	}, nil
 }

@@ -37,10 +37,10 @@ func TestLoadFieldsAndTTLResolution(t *testing.T) {
 	path := writeConfig(t, `
 cache_ttl: "1h"
 catalog: ttl: "2h"
+catalog: dir: "./local-catalog"
 models: url: "https://mirror.example/catalog.json"
 search_dirs: ["/opt/bin", "/usr/local/bin"]
 bin_paths: "claude-code": "/custom/claude"
-disabled_agents: ["foo"]
 color: "never"
 `)
 	got, err := Load(path)
@@ -49,6 +49,9 @@ color: "never"
 	}
 	if got.CatalogTTL != 2*time.Hour {
 		t.Errorf("CatalogTTL = %v, want section ttl 2h", got.CatalogTTL)
+	}
+	if got.CatalogDir != "./local-catalog" {
+		t.Errorf("CatalogDir = %q, want ./local-catalog", got.CatalogDir)
 	}
 	if got.ModelsTTL != time.Hour {
 		t.Errorf("ModelsTTL = %v, want cache_ttl fallback 1h", got.ModelsTTL)
@@ -61,9 +64,6 @@ color: "never"
 	}
 	if len(got.SearchDirs) != 2 || got.BinPaths["claude-code"] != "/custom/claude" {
 		t.Errorf("collection fields decoded wrong: %+v", got)
-	}
-	if len(got.Disabled) != 1 || got.Disabled[0] != "foo" {
-		t.Errorf("Disabled = %v", got.Disabled)
 	}
 }
 
@@ -81,6 +81,16 @@ func TestLoadRejectsRemovedEnrichModels(t *testing.T) {
 	_, err := Load(path)
 	if !errors.Is(err, ErrConfig) {
 		t.Fatalf("Load enrich_models err = %v, want ErrConfig", err)
+	}
+}
+
+func TestLoadRejectsRemovedDisabledAgents(t *testing.T) {
+	// disabled_agents was removed; a config.cue still setting it must fail closed
+	// rather than silently ignore a key that no longer does anything (R11).
+	path := writeConfig(t, `disabled_agents: ["foo"]`)
+	_, err := Load(path)
+	if !errors.Is(err, ErrConfig) {
+		t.Fatalf("Load disabled_agents err = %v, want ErrConfig", err)
 	}
 }
 

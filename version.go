@@ -7,6 +7,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/start-cli/agentdex/internal/catalog"
 )
 
 // versionTimeout bounds a single version exec. Version resolution is a
@@ -27,7 +29,7 @@ const maxVersionOutput = 64 << 10 // 64 KiB per stream
 // output produced before the failure is still parsed, and an unparseable result
 // yields an empty version rather than a detection error. Each stream is capped so
 // a binary that floods output cannot grow the buffers without bound.
-func probeVersion(ctx context.Context, binPath string, vp VersionProbe) string {
+func probeVersion(ctx context.Context, binPath string, vp catalog.VersionProbe) string {
 	ctx, cancel := context.WithTimeout(ctx, versionTimeout)
 	defer cancel()
 

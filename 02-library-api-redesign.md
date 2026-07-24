@@ -1518,6 +1518,124 @@ Step 0 precedes everything and is committed on its own. Steps 3, 4, and 5 depend
 on 1 and 2. Steps 7 and 8 depend on 3 through 6. Step 9 runs alongside 3 through
 8, so each relocated piece of behaviour lands with its tests.
 
+## Execution Workflow
+
+Implement one Implementation Plan step at a time. After completing a step, update
+the Progress section below to record what landed and the current build and test
+state, then stop and report before starting the next step. Do not run several
+steps together without a checkpoint between them. Because the redesign replaces the
+public API with no compatibility shim, the whole repository does not compile
+between the first library edit and the CLI rewrite; note that state in Progress
+rather than treating it as a failure. The library steps (1 through 7) reach a green
+`go build .` of the root package together at step 7; the whole repository is green
+again at step 9.
+
+## Progress
+
+- Step 0, harden the CLI oracle: done, committed 127cb3c.
+- Step 1, new public types and doc comment: done. New root files: types.go
+  (Result, queries, Agent/AgentDetail/Detection/Provider/Model, KnownAgent slimmed
+  to identity+capability, ResolvedPaths, Target/Refreshed), enrich.go (Enrich,
+  EnrichmentState, CoverageStatus, ProviderCoverage, WarningKind, Warning),
+  errors.go (R7 sentinels plus the wrapped-error helper that keeps verbatim library
+  text while errors.Is matches the sentinel), options.go (Option and every With*),
+  index.go (Index plus the three service types), doc.go (package doc drafted). Old
+  agent.go, catalog.go, resolve.go, resolve_test.go, probe.go removed; PathPair and
+  VersionProbe now live only in internal/catalog. internal/catalog/loaddir.go adds
+  the directory source. Build is red pending step 2 (core, Open, service methods),
+  which is expected for a types-only step.
+- Step 2, Open and lazy wiring and config: done. New root file core.go: Open (no
+  network I/O, returns the Index wiring the three services over one core),
+  newCore capturing the boundary inputs once (envLookup defaulting to
+  os.LookupEnv, working dir to os.Getwd, home resolved through the lookup with the
+  os.UserHomeDir fallback, logger to slog.DiscardHandler), the two guarded lazy
+  resolvers (resolveCatalog under catMu, modelsClient under mdMu) that resolve
+  once and do not memoise a failure, the module-vs-directory catalog source
+  selection, newModelsClient built from the captured settings with a force-refresh
+  hook reserved for Refresh, and mapCatalogErr mapping catalog.ErrUnavailable and
+  catalog.ErrInvalidCatalog to ErrCatalogUnavailable and ErrCatalogInvalid while
+  keeping the loader's diagnostic. Deleted the old public-API files agentdex.go and
+  engine.go (Option/config/With*/Detect* are replaced; the old fan-out is
+  incompatible with the slimmed KnownAgent and is rebuilt in step 3). version.go
+  retyped its probe to catalog.VersionProbe. Config: disabled_agents removed from
+  schema.cue, the raw wire shape, and Config.Disabled; catalog.dir added and
+  decoded into Config.CatalogDir; the option-mapping bridge collapsed to a single
+  Config.Options(Flags) []agentdex.Option for Open (WithDisabled and the
+  ModelsClient/ForceRefreshModelsClient builders dropped — the library owns the
+  client and Refresh owns force-refresh). config_test.go updated for the two schema
+  edits and a disabled_agents-now-rejected case. State: go build . (root) green,
+  internal/config green with tests passing; internal/cli and cmd/agentdex red
+  (step 8) and the old root test files red (step 9), as the workflow expects until
+  the CLI rewrite.
+- Step 3, AgentService: done. New root files: detect.go (boundary-aware detection
+  mechanics relocated from the old probe/engine — locateBinary, resolvePaths,
+  expandPath, absPath, detect, all reading the core's captured env lookup, home,
+  and working dir per R10), agents.go (AgentService.Get and List, the provider-set
+  resolution and agnostic/home rules of R8, probeCoverage producing the R5 coverage
+  verdicts as data plus provider-env and models in one pass, the per-level
+  enrichment and EnrichmentState encoding of R4, the concurrent detection fan-out,
+  and the R6 warning constructors with verbatim wording), sort.go (the library's
+  one newest-first model order and dedupeIDs). Shared test infrastructure added:
+  internal/catalogtest/module.go (WriteModule materialises a fixture module from an
+  inline agents.cue body plus the repo's real schema.cue, for WithCatalogDir), and
+  a new internal/modelsdevtest package (Server, Provider, Closed, MustNotFetch,
+  CountingServer) promoting the CLI's private models.dev doubles to a shared home.
+  Old root tests agentdex_test.go, catalog_test.go, enrich_test.go removed; their
+  surviving behaviours re-covered against the new surface in agents_test.go, the
+  ones R18 retires by design dropped (WithDisabled, WithSkipVersion, the
+  non-agnostic-no-provider case the schema forbids, and list-fails-on-drift, which
+  now degrades). State: go build . green and go test . passes, including under
+  -race; internal/cli and cmd/agentdex still red pending step 8. Deferred to later
+  steps by design: the cold-offline ErrCatalogUnavailable path and stale-catalog
+  warning injection (registry harness, step 6), the shared-Index concurrency/refresh
+  race test (step 6), and the provider/model mapping tests (steps 4, 5).
+- Step 4, ProviderService: done. New root file providers.go: ProviderService.List
+  (merged models.dev catalog fetched via the shared client, narrowed by a
+  case-insensitive id/name substring, ordered by id per R14, loading no agent
+  catalog and raising no warnings) and ProviderService.Get (exact fetch, ErrNotFound
+  on a miss with the verbatim `no models.dev provider "<id>"` text R7 sets), plus the
+  core.envPresence boundary helper reading each API-key var's presence through the
+  injected lookup (R10) and the shared matchesFilter helper (filterAgents refactored
+  onto it). core.go gained mapModelsErr: schema drift propagates wrapping
+  modelsdev.ErrModelsSchema (→ CLI config 78) while any other fetch fault becomes
+  ErrModelsUnavailable (→ transient 75), the models.dev analog of mapCatalogErr.
+  Debug logs at the list/get resolution boundaries feed R19. New providers_test.go
+  covers List ordering+env presence, filter-matches-nothing, id/name filter,
+  unreachable→ErrModelsUnavailable, gross-drift→ErrModelsSchema, and Get found/env,
+  unknown→ErrNotFound (message asserted), unreachable, and per-provider drift — all
+  through WithModelsURL/WithEnvLookup doubles with no agent catalog, proving the
+  pure-models.dev surface needs none (R12). State: go build . and go test . (incl.
+  -race) green, golangci-lint clean on the root package; internal/cli and cmd/agentdex
+  still red pending step 8, as the workflow expects.
+- Step 5, ModelService: done. New root file models.go: ModelService.List (scope
+  resolution via core.resolveModelScope enforcing the R8 agnostic/home rules —
+  ErrProvidersRequired, ErrProvidersNotAllowed, ErrUnknownProvider, ErrAgentUnknown
+  with the verbatim R7 library text; caller ids validated in every role via
+  validateModelProviders, which rejects an unknown id and propagates schema drift but
+  treats an outage as non-rejection so the listing fetch surfaces ErrModelsUnavailable
+  per R8; models across the scoped providers with canonical ids from the agnostic map,
+  browse filter, newest-first order per R14) and ModelService.Get (first-slash
+  composite split per R9 — ErrMalformedModelID on no slash, ErrNotFound for unknown
+  provider or model key with the verbatim composite messages, CanonicalID from the
+  agnostic map). sort.go gained sortModels ([]Model newest-first by the shared
+  newerModel comparator) and a generic sortedKeys; providers.go List refactored onto
+  sortedKeys. Debug logs at scope/composite resolution and provider-absent points feed
+  R19. New models_test.go covers no-scope span + newest-first + canonical id, direct
+  --provider validation, unknown provider, unreachable-does-not-reject-ids, filter,
+  agent home-provider scope, home+--provider rejection, agnostic-requires-providers,
+  agnostic+providers, unknown agent, and Get composite/canonical/malformed/unknown-
+  provider/unknown-key/first-slash-split/schema-drift — messages asserted by full
+  string. State: go build . and go test . (incl. -race) green, gofmt/vet/golangci-lint
+  clean on the root package; internal/cli and cmd/agentdex still red pending step 8.
+  Deferred by design: stale-catalog warning on Models.List agent scope (registry
+  harness, step 6).
+- Step 6, Refresh, CatalogStale, stale-warning injection: pending.
+- Step 7, remove old API and relocate mechanics: pending.
+- Step 8, rewrite internal/cli as a thin shell: pending.
+- Step 9, move test coverage down with the behaviour: pending.
+- Step 10, documentation: pending.
+- Step 11, finalisation sweep: pending.
+
 ## Implementation Guidance
 
 - Treat the `modelsdev` leaf as fixed. Everything new composes over it; nothing

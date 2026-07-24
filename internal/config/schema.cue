@@ -8,6 +8,7 @@
 	cache_ttl?: string
 	catalog: {
 		module: string | *"github.com/start-cli/agentdex/catalog@v1"
+		dir?:   string
 		ttl?:   string
 	}
 	models: {
@@ -16,6 +17,5 @@
 	}
 	search_dirs?: [...string]
 	bin_paths?: [string]: string
-	disabled_agents?: [...string]
 	color: "auto" | "always" | "never" | *"auto"
 }
